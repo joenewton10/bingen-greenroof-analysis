@@ -1,12 +1,14 @@
 # Bingen Green Roof Cooling Analysis
 
-A comprehensive data pipeline and interactive dashboard system for analyzing thermal performance of green roof installations in Bingen, Germany. The system ingests multi-source sensor data, performs validation and harmonization, and provides quantitative analysis through an interactive web-based dashboard to evaluate cooling effectiveness across environmental conditions.
+A comprehensive data pipeline and interactive dashboard system for analyzing performance of green roof installations in Bingen, Germany. The system ingests multi-source sensor data, performs validation and harmonization, and provides quantitative analysis through an interactive web-based dashboard to evaluate cooling effectiveness across environmental conditions.
 
 ---
 
 ## Quick Start
 
 Prerequisites: Python 3.10+ and PostgreSQL installation with database access.
+
+### Setup Commands
 
 ```bash
 # 1. Clone repository
@@ -36,7 +38,12 @@ python scripts/run_pipeline.py
 streamlit run dashboard/app.py
 ```
 
-The dashboard will be accessible at `http://localhost:8502`
+### Verification
+
+- Command prompt displays `(.venv)` prefix after step 3
+- Step 4 completes without error messages
+- Step 6 exits with status "PIPELINE COMPLETED SUCCESSFULLY"
+- Dashboard is accessible at `http://localhost:8502` after step 7
 
 ---
 
