@@ -138,13 +138,25 @@ def find_data_start(filepath):
 
 
 def extract_name_unit(h):
-    '''Extract name and unit from header like "IR1 [W/m2] = m1 /E1/800016"'''
+    '''Extract name and unit from header like "IR1 [W/m2] = m1 /E1/800016"
+    Preserves "= Min" and "= Max" suffixes for 2020 format headers.
+    '''
     h = h.strip().strip('"')
+    
+    # Check for Min/Max suffix before the unit bracket
+    min_max_suffix = ''
+    if ' = Min' in h:
+        min_max_suffix = ' Min'
+        h = h.replace(' = Min', '')
+    elif ' = Max' in h:
+        min_max_suffix = ' Max'
+        h = h.replace(' = Max', '')
+    
     match = re.match(r'^([^\[]+)\[([^\]]+)\]', h)
     if match:
         name = match.group(1).strip()
         unit = match.group(2).strip()
-        return f"{name} [{unit}]"
+        return f"{name}{min_max_suffix} [{unit}]"
     return h.split('[')[0].split('=')[0].strip()
 
 
@@ -175,6 +187,36 @@ def convert_column_numeric(series):
         s.loc[multi_dot_mask] = s.loc[multi_dot_mask].apply(collapse_dots)
 
     return pd.to_numeric(s.replace('', pd.NA), errors='coerce')
+
+
+def convert_scalar_numeric(value):
+    '''Convert a single scalar to float using the same cleanup logic as column conversion.'''
+    if value is None:
+        return None
+
+    s = str(value).strip()
+    if s == '':
+        return None
+
+    s = s.replace('\xa0', '').replace(' ', '')
+
+    if ',' in s:
+        left, right = s.split(',', 1)
+        s = left + '.' + right.replace(',', '')
+
+    s = re.sub(r'[^0-9\.\-]', '', s)
+
+    if s.count('.') > 1:
+        first, rest = s.split('.', 1)
+        s = first + '.' + rest.replace('.', '')
+
+    if s in ('', '-', '.', '-.'):
+        return None
+
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
 
 
 def normalize_scales(df):
@@ -266,60 +308,108 @@ def parse_any_date(val):
 HEADER_MAP = {
     clean_colname('Nr.'): 'No.',
     clean_colname('Datum / Uhrzeit'): 'Date / Time',
+    # IR1 - both numbered suffix format (2024) and explicit Min/Max (2020)
     clean_colname('IR1 [W/m2]'): 'IR1 [W/m2]',
     clean_colname('IR1 [W/m2]_1'): 'IR1 Min [W/m2]',
     clean_colname('IR1 [W/m2]_2'): 'IR1 Max [W/m2]',
+    clean_colname('IR1 Min [W/m2]'): 'IR1 Min [W/m2]',
+    clean_colname('IR1 Max [W/m2]'): 'IR1 Max [W/m2]',
+    # SR1
     clean_colname('SR1 [W/m2]'): 'SR1 [W/m2]',
     clean_colname('SR1 [W/m2]_1'): 'SR1 Min [W/m2]',
     clean_colname('SR1 [W/m2]_2'): 'SR1 Max [W/m2]',
+    clean_colname('SR1 Min [W/m2]'): 'SR1 Min [W/m2]',
+    clean_colname('SR1 Max [W/m2]'): 'SR1 Max [W/m2]',
+    # IR2
     clean_colname('IR2 [W/m2]'): 'IR2 [W/m2]',
     clean_colname('IR2 [W/m2]_1'): 'IR2 Min [W/m2]',
     clean_colname('IR2 [W/m2]_2'): 'IR2 Max [W/m2]',
+    clean_colname('IR2 Min [W/m2]'): 'IR2 Min [W/m2]',
+    clean_colname('IR2 Max [W/m2]'): 'IR2 Max [W/m2]',
     clean_colname('SR2 [W/m2]'): 'SR2 [W/m2]',
     clean_colname('SR2 [W/m2]_1'): 'SR2 Min [W/m2]',
     clean_colname('SR2 [W/m2]_2'): 'SR2 Max [W/m2]',
+    clean_colname('SR2 Min [W/m2]'): 'SR2 Min [W/m2]',
+    clean_colname('SR2 Max [W/m2]'): 'SR2 Max [W/m2]',
+    # Temperature
     clean_colname('Temp [degC]'): 'Temp [C]',
     clean_colname('Temp [degC]_1'): 'Temp Min [C]',
     clean_colname('Temp [degC]_2'): 'Temp Max [C]',
+    clean_colname('Temp Min [degC]'): 'Temp Min [C]',
+    clean_colname('Temp Max [degC]'): 'Temp Max [C]',
+    # Air Pressure
     clean_colname('Luftdruck [mbar]'): 'Air Pressure [mbar]',
     clean_colname('Luftdruck [mbar]_1'): 'Air Pressure Min [mbar]',
     clean_colname('Luftdruck [mbar]_2'): 'Air Pressure Max [mbar]',
+    clean_colname('Luftdruck Min [mbar]'): 'Air Pressure Min [mbar]',
+    clean_colname('Luftdruck Max [mbar]'): 'Air Pressure Max [mbar]',
+    # Soil Moisture
     clean_colname('Bodenfeucht [vol%]'): 'Soil Moisture [vol%]',
     clean_colname('Bodenfeucht [vol%]_1'): 'Soil Moisture Min [vol%]',
     clean_colname('Bodenfeucht [vol%]_2'): 'Soil Moisture Max [vol%]',
+    clean_colname('Bodenfeucht Min [vol%]'): 'Soil Moisture Min [vol%]',
+    clean_colname('Bodenfeucht Max [vol%]'): 'Soil Moisture Max [vol%]',
+    # Air Humidity 1
     clean_colname('Luftfeu-1 [%RH]'): 'Air Humidity 1 [%RH]',
     clean_colname('Luftfeu-1 [%RH]_1'): 'Air Humidity 1 Min [%RH]',
     clean_colname('Luftfeu-1 [%RH]_2'): 'Air Humidity 1 Max [%RH]',
+    clean_colname('Luftfeu-1 Min [%RH]'): 'Air Humidity 1 Min [%RH]',
+    clean_colname('Luftfeu-1 Max [%RH]'): 'Air Humidity 1 Max [%RH]',
+    # Air Temp 1 (note: header says Luftemp-1 not Lufttemp-1)
     clean_colname('Lufttemp-1 [degC]'): 'Air Temp 1 [C]',
     clean_colname('Lufttemp-1 [degC]_1'): 'Air Temp 1 Min [C]',
     clean_colname('Lufttemp-1 [degC]_2'): 'Air Temp 1 Max [C]',
+    clean_colname('Luftemp-1 [degC]'): 'Air Temp 1 [C]',
+    clean_colname('Luftemp-1 Min [degC]'): 'Air Temp 1 Min [C]',
+    clean_colname('Luftemp-1 Max [degC]'): 'Air Temp 1 Max [C]',
+    # Air Humidity 2
     clean_colname('Luftfeu-2 [%RH]'): 'Air Humidity 2 [%RH]',
     clean_colname('Luftfeu-2 [%RH]_1'): 'Air Humidity 2 Min [%RH]',
     clean_colname('Luftfeu-2 [%RH]_2'): 'Air Humidity 2 Max [%RH]',
+    clean_colname('Luftfeu-2 Min [%RH]'): 'Air Humidity 2 Min [%RH]',
+    clean_colname('Luftfeu-2 Max [%RH]'): 'Air Humidity 2 Max [%RH]',
+    # Air Temp 2
     clean_colname('Lufttemp-2 [degC]'): 'Air Temp 2 [C]',
     clean_colname('Lufttemp-2 [degC]_1'): 'Air Temp 2 Min [C]',
     clean_colname('Lufttemp-2 [degC]_2'): 'Air Temp 2 Max [C]',
+    clean_colname('Lufttemp-2 Min [degC]'): 'Air Temp 2 Min [C]',
+    clean_colname('Lufttemp-2 Max [degC]'): 'Air Temp 2 Max [C]',
+    # Wind Speed
     clean_colname('Windgeschw [m/s]'): 'Wind Speed [m/s]',
     clean_colname('Windgeschw [m/s]_1'): 'Wind Speed Min [m/s]',
     clean_colname('Windgeschw [m/s]_2'): 'Wind Speed Max [m/s]',
+    clean_colname('Windgeschw Min [m/s]'): 'Wind Speed Min [m/s]',
+    clean_colname('Windgeschw Max [m/s]'): 'Wind Speed Max [m/s]',
+    # Wind Direction
     clean_colname('Windricht [grad]'): 'Wind Direction [deg]',
     clean_colname('Windricht [grad]_1'): 'Wind Direction Min [deg]',
     clean_colname('Windricht [grad]_2'): 'Wind Direction Max [deg]',
+    clean_colname('Windricht Min [grad]'): 'Wind Direction Min [deg]',
+    clean_colname('Windricht Max [grad]'): 'Wind Direction Max [deg]',
+    # Soil Temp 1
     clean_colname('Bodentemp-1 [degC]'): 'Soil Temp 1 [C]',
     clean_colname('Bodentemp-1 [degC]_1'): 'Soil Temp 1 Min [C]',
     clean_colname('Bodentemp-1 [degC]_2'): 'Soil Temp 1 Max [C]',
+    clean_colname('Bodentemp-1 Min [degC]'): 'Soil Temp 1 Min [C]',
+    clean_colname('Bodentemp-1 Max [degC]'): 'Soil Temp 1 Max [C]',
+    # Soil Temp 2
     clean_colname('Bodentemp-2 [degC]'): 'Soil Temp 2 [C]',
     clean_colname('Bodentemp-2 [degC]_1'): 'Soil Temp 2 Min [C]',
     clean_colname('Bodentemp-2 [degC]_2'): 'Soil Temp 2 Max [C]',
+    clean_colname('Bodentemp-2 Min [degC]'): 'Soil Temp 2 Min [C]',
+    clean_colname('Bodentemp-2 Max [degC]'): 'Soil Temp 2 Max [C]',
+    # Counters and misc
     clean_colname('Zaehler1 [Impulse]'): 'Counter 1 [Impulses]',
     clean_colname('Regen-abs [mm]'): 'Rain Abs [mm]',
     clean_colname('Zaehler1-Differenz [Impulse]'): 'Counter 1 Diff [Impulses]',
     clean_colname('Regen-rel [mm]'): 'Rain Rel [mm]',
     clean_colname('Dauer Zahlvorgang'): 'Duration Counting',
+    clean_colname('Dauer Zählvorgang'): 'Duration Counting',  # with umlaut
     clean_colname('Vbatt [V]'): 'Battery Voltage [V]',
     clean_colname('Tintern [degC]'): 'Internal Temp [C]',
     clean_colname('Alarmstufe'): 'Alarm Level',
     clean_colname('Feldstarke 1'): 'Field Strength 1',
+    clean_colname('Feldstärke 1'): 'Field Strength 1',  # with umlaut
     clean_colname('Seriennummer'): 'Serial Number',
 }
 
@@ -370,6 +460,16 @@ def read_csv_clean(filepath):
             lines = f.readlines()
 
     header_line = lines[data_start - 1].strip()
+    
+    # Handle quoted header line (2020 Kissel format - entire line wrapped in quotes)
+    if header_line.startswith('"'):
+        # Remove outer quotes and unescape internal doubled quotes
+        # The line is wrapped in quotes with "" used for escaping inside
+        header_line = header_line[1:]  # Remove leading quote
+        if header_line.endswith('"'):
+            header_line = header_line[:-1]  # Remove trailing quote
+        header_line = header_line.replace('""', '"')  # Unescape doubled quotes
+    
     header_raw = [extract_name_unit(h) for h in header_line.split(';')]
 
     while header_raw and (header_raw[-1] == '' or header_raw[-1] is None):
@@ -457,7 +557,8 @@ def read_csv_clean(filepath):
     for col in df.columns:
         if any(ex in col for ex in exclude_cols):
             continue
-        if pd.api.types.is_object_dtype(df[col]):
+        # Check for both object dtype and StringDtype (pandas extension type)
+        if pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]):
             try:
                 df[col] = convert_column_numeric(df[col])
             except Exception:
@@ -468,6 +569,10 @@ def read_csv_clean(filepath):
 
     # Apply scale normalization
     df = normalize_scales(df)
+
+    # Handle duplicate columns (2020 format has multiple variants mapping to same column)
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
 
     # Align to FINAL_COLS
     df = df.reindex(columns=FINAL_COLS)
@@ -506,8 +611,13 @@ def _insert_batch(conn, df, batch_size=1000):
                         values.append(ts if not pd.isna(ts) else None)
                     except:
                         values.append(None)
+                elif col in ('source_file', 'Serial Number'):
+                    values.append(str(val).strip())
                 else:
-                    values.append(val)
+                    if isinstance(val, str):
+                        values.append(convert_scalar_numeric(val))
+                    else:
+                        values.append(val)
 
             placeholders = ', '.join(['%s'] * len(db_cols))
             col_names = ', '.join(db_cols)
@@ -564,6 +674,7 @@ def ingest_parkplatz():
                 print(f"  Inserted {rows} rows")
         except Exception as e:
             print(f"  ERROR: {e}")
+            conn.rollback()  # Reset transaction state after error
             continue
 
         if i % 50 == 0:

@@ -1,6 +1,110 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Data & Logs
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.log.*
+logs/
+outputs/
+data/raw/
+pipeline_log*
+ingest_log*
+parkplatz_log*
+pipeline_output*
+pipeline_status*
+test_output/
+
+# Database
+*.dump
+*.sql.bak
+*.backup
+pg_dump/
+postgres_data/
+
+# Streamlit
 .streamlit/secrets.toml
-*.sql
-data/raw/**/*.csv
+.streamlit/secrets/
+
+# OS
+.DS_Store
+Thumbs.db
+.envrc
+.direnv
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Misc
+*.tmp
+*.temp
+*.bak
+*.swp
+.salt/
+node_modules/

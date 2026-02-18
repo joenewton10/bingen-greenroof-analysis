@@ -1,8 +1,0 @@
-numpy
-pandas
-altair==4.2.2
-plotly
-psycopg2-binary
-python-dotenv
-sqlalchemy
-streamlit

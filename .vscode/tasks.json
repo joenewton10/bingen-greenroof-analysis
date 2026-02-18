@@ -14,34 +14,6 @@
 			"isBackground": true,
 			"problemMatcher": [],
 			"group": "build"
-		},
-		{
-			"label": "Run Streamlit dashboard",
-			"type": "shell",
-			"command": "C:/Users/Joe/Analysis code/bingen_greenroof_pipeline/.venv/Scripts/python.exe",
-			"args": [
-				"-m",
-				"streamlit",
-				"run",
-				"dashboard/app.py"
-			],
-			"isBackground": true,
-			"problemMatcher": [],
-			"group": "build"
-		},
-		{
-			"label": "Run Streamlit dashboard",
-			"type": "shell",
-			"command": "C:/Users/Joe/Analysis code/bingen_greenroof_pipeline/.venv/Scripts/python.exe",
-			"args": [
-				"-m",
-				"streamlit",
-				"run",
-				"dashboard/app.py"
-			],
-			"isBackground": true,
-			"problemMatcher": [],
-			"group": "build"
 		}
 	]
 }

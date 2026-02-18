@@ -7,7 +7,8 @@ Connects to Bingen_Greenroof_DB and uses synchronized_data_filtered table.
 import os
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 import warnings
 
 try:
@@ -15,6 +16,10 @@ try:
 except Exception:
     st = None
 warnings.filterwarnings('ignore')
+
+
+class DataLoadError(RuntimeError):
+    """Raised when dashboard data cannot be loaded from PostgreSQL."""
 
 
 def _get_secret(name):
@@ -51,18 +56,67 @@ class BingenGreenRoofAnalyzer:
         if db_params:
             defaults.update({key: value for key, value in db_params.items() if value is not None})
         self.db_params = defaults
-            
-        self.df = None
-        self.analysis_results = {}
-        
-    def load_data(self):
-        """Load data from Bingen pipeline synchronized_data_filtered table."""
-        engine = create_engine(
+        self.engine = create_engine(
             f"postgresql://{self.db_params['user']}:{self.db_params['password']}@"
             f"{self.db_params['host']}:{self.db_params['port']}/{self.db_params['dbname']}"
         )
+            
+        self.df = None
+        self.analysis_results = {}
+
+    def get_available_years(self):
+        """Get available years for yearly analysis controls."""
+        query = text(
+            """
+            SELECT DISTINCT EXTRACT(YEAR FROM timestamp)::int AS year
+            FROM synchronized_data_filtered
+            WHERE timestamp IS NOT NULL
+            ORDER BY year;
+            """
+        )
+        try:
+            years_df = pd.read_sql_query(query, self.engine)
+            return years_df['year'].dropna().astype(int).tolist()
+        except Exception:
+            return []
+
+    def get_timestamp_bounds(self):
+        """Get min/max timestamp from synchronized table."""
+        query = text(
+            """
+            SELECT MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts
+            FROM synchronized_data_filtered;
+            """
+        )
+        try:
+            bounds = pd.read_sql_query(query, self.engine)
+            min_ts = pd.to_datetime(bounds.loc[0, 'min_ts'])
+            max_ts = pd.to_datetime(bounds.loc[0, 'max_ts'])
+            return min_ts, max_ts
+        except Exception:
+            return None, None
         
-        query = """
+    def load_data(self, start_ts=None, end_ts=None, year=None):
+        """Load filtered data from synchronized_data_filtered table."""
+        conditions = [
+            "temp_diff_1 IS NOT NULL",
+            "temp_diff_2 IS NOT NULL",
+        ]
+        params = {}
+
+        if year is not None:
+            conditions.append("EXTRACT(YEAR FROM timestamp) = :year")
+            params['year'] = int(year)
+
+        if start_ts is not None:
+            conditions.append("timestamp >= :start_ts")
+            params['start_ts'] = pd.to_datetime(start_ts)
+
+        if end_ts is not None:
+            conditions.append("timestamp <= :end_ts")
+            params['end_ts'] = pd.to_datetime(end_ts)
+
+        query = text(f"""
         SELECT 
             timestamp,
             avg_air_temperature_greenroof,
@@ -84,12 +138,41 @@ class BingenGreenRoofAnalyzer:
             energy_from_surface_parkplatz,
             radiation_balance_parkplatz
         FROM synchronized_data_filtered 
-        WHERE temp_diff_1 IS NOT NULL 
-          AND temp_diff_2 IS NOT NULL
+        WHERE {' AND '.join(conditions)}
         ORDER BY timestamp;
-        """
-        
-        self.df = pd.read_sql_query(query, engine)
+        """)
+        try:
+            self.df = pd.read_sql_query(query, self.engine, params=params)
+        except (SQLAlchemyError, Exception) as exc:
+            error_text = str(exc)
+            base_message = (
+                "PostgreSQL could not read data from table 'synchronized_data_filtered'. "
+                "This usually indicates table/index corruption or storage-level read issues."
+            )
+            if year is None and start_ts is None and end_ts is None:
+                hint_message = (
+                    "Try enabling 'Yearly analysis mode' and/or 'Custom timestamp filter' "
+                    "to avoid scanning corrupted table blocks."
+                )
+            else:
+                hint_message = (
+                    "The selected range still touches unreadable blocks. Narrow the date range "
+                    "or run PostgreSQL recovery checks (REINDEX/VACUUM and hardware/storage check)."
+                )
+            raise DataLoadError(f"{base_message}\n{hint_message}\n\nTechnical error: {error_text}") from exc
+
+        if self.df.empty:
+            self.analysis_results['dataset_info'] = {
+                'total_measurements': 0,
+                'date_range': 'No data in selected filter',
+                'year_filter': year,
+                'custom_range': {
+                    'start': str(start_ts) if start_ts is not None else None,
+                    'end': str(end_ts) if end_ts is not None else None,
+                }
+            }
+            return self.df
+
         self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
         self.df.set_index('timestamp', inplace=True)
         self.df = self.df.sort_index()
@@ -98,6 +181,7 @@ class BingenGreenRoofAnalyzer:
         # Add time features
         self.df['hour'] = self.df.index.hour
         self.df['month'] = self.df.index.month
+        self.df['year'] = self.df.index.year
         self.df['season'] = self.df['month'].map({
             12: 'Winter', 1: 'Winter', 2: 'Winter',
             3: 'Spring', 4: 'Spring', 5: 'Spring',
@@ -108,6 +192,11 @@ class BingenGreenRoofAnalyzer:
         self.analysis_results['dataset_info'] = {
             'total_measurements': len(self.df),
             'date_range': f"{self.df.index.min().strftime('%Y-%m-%d')} to {self.df.index.max().strftime('%Y-%m-%d')}",
+            'year_filter': year,
+            'custom_range': {
+                'start': str(start_ts) if start_ts is not None else None,
+                'end': str(end_ts) if end_ts is not None else None,
+            }
         }
         
         return self.df

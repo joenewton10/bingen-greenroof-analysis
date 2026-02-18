@@ -9,9 +9,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+from datetime import datetime, timedelta
 
 # Import local analysis module
-from analysis import BingenGreenRoofAnalyzer, CONDITION_COLORS
+from analysis import BingenGreenRoofAnalyzer, CONDITION_COLORS, DataLoadError
 
 
 # Page configuration
@@ -49,11 +50,20 @@ st.markdown("""
 
 
 @st.cache_resource
-def load_analyzer():
-    """Load and cache the analyzer with data."""
+def get_metadata_analyzer():
+    """Create a lightweight analyzer for metadata queries."""
+    return BingenGreenRoofAnalyzer()
+
+
+@st.cache_resource
+def load_analyzer(selected_year, start_ts_iso, end_ts_iso):
+    """Load and cache analyzer with filter-aware data loading."""
     analyzer = BingenGreenRoofAnalyzer()
-    analyzer.load_data()
-    analyzer.create_condition_categories()
+    start_ts = pd.to_datetime(start_ts_iso) if start_ts_iso else None
+    end_ts = pd.to_datetime(end_ts_iso) if end_ts_iso else None
+    analyzer.load_data(start_ts=start_ts, end_ts=end_ts, year=selected_year)
+    if analyzer.df is not None and not analyzer.df.empty:
+        analyzer.create_condition_categories()
     return analyzer
 
 
@@ -62,12 +72,97 @@ def main():
     st.markdown('<p class="main-header">🌿 Bingen Green Roof Cooling Analysis</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Comprehensive analysis of green roof thermal performance</p>', unsafe_allow_html=True)
     
-    # Load data
-    with st.spinner("Loading data from database..."):
-        analyzer = load_analyzer()
-    
     # Sidebar
     st.sidebar.title("⚙️ Analysis Settings")
+
+    metadata_analyzer = get_metadata_analyzer()
+    available_years = metadata_analyzer.get_available_years()
+    min_ts, max_ts = metadata_analyzer.get_timestamp_bounds()
+
+    if min_ts is None or max_ts is None:
+        fallback_end = datetime.now()
+        fallback_start = fallback_end - timedelta(days=30)
+        min_ts = pd.Timestamp(fallback_start)
+        max_ts = pd.Timestamp(fallback_end)
+        st.sidebar.warning("Could not read full timestamp bounds from PostgreSQL. Using last 30 days as fallback defaults.")
+
+    yearly_mode = st.sidebar.toggle(
+        "Yearly analysis mode",
+        value=False,
+        help="When enabled, query only one year from PostgreSQL."
+    )
+
+    selected_year = None
+    if yearly_mode and available_years:
+        selected_year = st.sidebar.selectbox(
+            "Select year",
+            options=available_years,
+            index=len(available_years) - 1
+        )
+
+    custom_timestamp_mode = st.sidebar.toggle(
+        "Custom timestamp filter",
+        value=False,
+        help="Restrict query to a custom start/end timestamp range."
+    )
+
+    start_ts = None
+    end_ts = None
+    if custom_timestamp_mode:
+        default_start = min_ts.to_pydatetime()
+        default_end = max_ts.to_pydatetime()
+
+        start_date = st.sidebar.date_input(
+            "Start date",
+            value=default_start.date(),
+            min_value=min_ts.date(),
+            max_value=max_ts.date(),
+        )
+        start_time = st.sidebar.time_input("Start time", value=default_start.time())
+
+        end_date = st.sidebar.date_input(
+            "End date",
+            value=default_end.date(),
+            min_value=min_ts.date(),
+            max_value=max_ts.date(),
+        )
+        end_time = st.sidebar.time_input("End time", value=default_end.time())
+
+        start_ts = datetime.combine(start_date, start_time)
+        end_ts = datetime.combine(end_date, end_time)
+
+        if start_ts > end_ts:
+            st.sidebar.error("Start timestamp must be earlier than end timestamp.")
+            st.stop()
+
+    show_yearly_display = st.sidebar.toggle(
+        "Show yearly analysis display",
+        value=False,
+        help="Display yearly trends (record count and mean temperature differences)."
+    )
+
+    start_ts_iso = pd.Timestamp(start_ts).isoformat() if start_ts is not None else None
+    end_ts_iso = pd.Timestamp(end_ts).isoformat() if end_ts is not None else None
+
+    # Load data
+    try:
+        with st.spinner("Loading filtered data from database..."):
+            analyzer = load_analyzer(selected_year, start_ts_iso, end_ts_iso)
+    except DataLoadError as exc:
+        st.error("Database read failed while loading dashboard data.")
+        st.code(str(exc))
+        st.info(
+            "PostgreSQL recovery checklist: "
+            "1) REINDEX TABLE synchronized_data_filtered; "
+            "2) VACUUM (VERBOSE, ANALYZE) synchronized_data_filtered; "
+            "3) Check PostgreSQL logs and disk health; "
+            "4) Restore from backup if corruption persists."
+        )
+        st.stop()
+
+    if analyzer.df is None or analyzer.df.empty:
+        st.warning("No records match the selected filters. Adjust year/timestamp filters and try again.")
+        st.stop()
     
     temp_diff_choice = st.sidebar.radio(
         "Temperature Difference Metric",
@@ -80,6 +175,15 @@ def main():
     info = analyzer.analysis_results['dataset_info']
     st.sidebar.write(f"**Records:** {info['total_measurements']:,}")
     st.sidebar.write(f"**Date Range:** {info['date_range']}")
+    active_year_text = str(info.get('year_filter')) if info.get('year_filter') is not None else "All"
+    custom_range = info.get('custom_range', {})
+    custom_range_text = (
+        f"{custom_range.get('start')} → {custom_range.get('end')}"
+        if custom_range.get('start') and custom_range.get('end')
+        else "All"
+    )
+    st.sidebar.write(f"**Year Filter:** {active_year_text}")
+    st.sidebar.write(f"**Timestamp Filter:** {custom_range_text}")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📐 Thresholds")
@@ -89,6 +193,51 @@ def main():
     - **Within Error:** ±0.2°C
     - **Meaningful Warming:** > +0.2°C
     """)
+
+    if yearly_mode:
+        st.info(f"Yearly mode enabled: analyzing year {selected_year}")
+
+    if show_yearly_display:
+        st.subheader("📅 Yearly Analysis Display")
+        yearly_summary = analyzer.df.groupby('year').agg(
+            records=('temp_diff_2', 'size'),
+            mean_temp_diff_1=('temp_diff_1', 'mean'),
+            mean_temp_diff_2=('temp_diff_2', 'mean')
+        ).reset_index()
+
+        fig_yearly = go.Figure()
+        fig_yearly.add_trace(go.Bar(
+            x=yearly_summary['year'],
+            y=yearly_summary['records'],
+            name='Records',
+            yaxis='y2',
+            marker_color='#90CAF9'
+        ))
+        fig_yearly.add_trace(go.Scatter(
+            x=yearly_summary['year'],
+            y=yearly_summary['mean_temp_diff_1'],
+            mode='lines+markers',
+            name='Mean temp_diff_1',
+            line=dict(color='#2E7D32', width=2)
+        ))
+        fig_yearly.add_trace(go.Scatter(
+            x=yearly_summary['year'],
+            y=yearly_summary['mean_temp_diff_2'],
+            mode='lines+markers',
+            name='Mean temp_diff_2',
+            line=dict(color='#1565C0', width=2)
+        ))
+        fig_yearly.add_hline(y=0, line_dash="dash", line_color="red", line_width=1)
+        fig_yearly.update_layout(
+            title='Yearly Temperature Difference Trends',
+            xaxis_title='Year',
+            yaxis_title='Mean Temperature Difference [°C]',
+            yaxis2=dict(title='Record Count', overlaying='y', side='right', showgrid=False),
+            height=420,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
+        )
+        st.plotly_chart(fig_yearly, use_container_width=True)
+        st.dataframe(yearly_summary, use_container_width=True, hide_index=True)
     
     # Main content tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
