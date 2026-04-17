@@ -102,8 +102,10 @@ outputs/*
 !outputs/parkplatz_qc_shortlist.md
 test_output/
 
-# Internal thesis context notes (not for public repo)
+# Internal thesis context notes and scripts (not for public repo)
 context_files/
+scripts/thesis_plots.py
+scripts/thesis_summary.py
 
 # Instructions docs (tracked)
 !instructions/
