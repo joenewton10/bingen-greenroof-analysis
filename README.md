@@ -110,9 +110,7 @@ bingen_greenroof_pipeline/
 ├── scripts/
 │   ├── run_pipeline.py
 │   ├── verify_pipeline.py
-│   ├── benchmark_pipeline.py
-│   ├── thesis_plots.py
-│   └── thesis_summary.py
+│   └── benchmark_pipeline.py
 ├── dashboard/
 │   ├── app.py
 │   └── analysis.py
@@ -120,7 +118,6 @@ bingen_greenroof_pipeline/
 │   ├── README.md
 │   ├── QUICK_START.md
 │   └── PIPELINE_GUIDE.md
-├── context_files/
 ├── logs/
 └── outputs/
 ```
@@ -131,7 +128,7 @@ bingen_greenroof_pipeline/
 
 - Source code: `pipeline/`, `scripts/`, `dashboard/`, `config/settings.py`
 - Config template: `config/.env.example`
-- Documentation: `README.md`, `instructions/`, `context_files/`, selected `outputs/*.md`
+- Documentation: `README.md`, `instructions/`, selected `outputs/*.md`
 - Folder placeholders and folder README files in `data/raw/` and `logs/`
 
 ### Exclude from GitHub
@@ -140,6 +137,8 @@ bingen_greenroof_pipeline/
 - Raw datasets and large generated artifacts under `data/raw/`
 - Runtime logs under `logs/`
 - Generated outputs (`.csv`, `.json`, figures, temporary analysis artifacts)
+- Thesis-specific scripts (`scripts/thesis_plots.py`, `scripts/thesis_summary.py`)
+- Context notes: `context_files/`
 - Local environment and cache folders (`.venv`, `__pycache__`, notebook checkpoints)
 
 These exclusions are enforced by `.gitignore`.
