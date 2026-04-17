@@ -1,0 +1,89 @@
+# Bingen Greenroof Pipeline Configuration
+# Customize pipeline behavior without changing code
+
+# Table naming conventions
+tables:
+  ingested:
+    empower_greenroof: "ingested_empower_greenroof"
+    kissel_greenroof: "ingested_kissel_greenroof"
+    parkplatz: "ingested_parkplatz"
+  
+  qc_filtered:
+    greenroof: "qc_filtered_greenroof"
+    parkplatz: "qc_filtered_parkplatz"
+  
+  harmonized:
+    greenroof: "harm_greenroof"
+    parkplatz: "harm_parkplatz"
+  
+  final:
+    synchronized: "synchronized_data_filtered"
+    partitioned: "synchronized_data_yearly"
+
+# Quality-control filtering ranges for sensor data (min, max)
+qc_filter_ranges:
+  air_temperature: [-25.0, 45.0]
+  soil_temperature: [-20.0, 50.0]
+  relative_humidity: [0.0, 100.0]
+  wind_speed: [0.0, 50.0]
+  wind_direction: [0.0, 360.0]
+  soil_moisture: [0.0, 60.0]
+  sr1_in_sw: [-15.0, 1400.0]
+  sr2_out_sw: [-15.0, 1400.0]
+  ir1_in_lw: [-200.0, 100.0]
+  ir2_out_lw: [-200.0, 150.0]
+  air_pressure: [900.0, 1100.0]
+
+# Minimum row counts per stage (for QC checks)
+min_row_counts:
+  ingest:
+    empower_greenroof: 1000
+    kissel_greenroof: 1000
+    parkplatz: 1000
+  qc_filter:
+    empower_greenroof: 500
+    kissel_greenroof: 500
+    parkplatz: 500
+  harmonize:
+    greenroof: 500
+    parkplatz: 500
+  sync:
+    synchronized: 100
+
+# Pipeline behavior
+pipeline:
+  # Number of old log files to keep
+  log_retention: 5
+  
+  # Maximum log file size before rotation (in MB)
+  log_max_size_mb: 10
+  
+  # Enable progress reporting
+  verbose: false
+  
+  # Timezone for timestamp operations
+  timezone: "Europe/Berlin"
+
+# Database connection
+database:
+  # Connection retry attempts and delay (seconds)
+  retry_attempts: 3
+  retry_delay_seconds: 5
+  
+  # Query timeout (seconds)
+  query_timeout_seconds: 300
+
+# Data paths (relative to project root)
+data_paths:
+  raw_data: "data/raw"
+  greenroof_subdir: "greenroof"
+  parkplatz_subdir: "parkplatz"
+  outputs: "outputs"
+  logs: "logs"
+
+# Materialized view settings
+materialized_views:
+  # List of views to refresh after sync (optional)
+  refresh_after_sync:
+    - "mv_sync_hourly_dashboard"
+    - "mv_sync_yearly_dashboard"

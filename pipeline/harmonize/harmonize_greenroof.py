@@ -1,62 +1,50 @@
 '''
-Harmonize Greenroof Data - Combine BOTH validated sources into canonical schema.
+Harmonize Greenroof Data - Combine BOTH QC-filtered sources into canonical schema.
 
 Based on: combine_greenroof.py
 
 Table naming convention for Bingen pipeline:
-- Sources: val_ingested_empower_greenroof, val_ingested_kissel_greenroof
+- Source: qc_filtered_greenroof
 - Output: harm_greenroof
 
-Both validated tables have identical schema:
+QC-filtered table schema:
   id, timestamp, serial_no, ir1, sr1, ir2, sr2, temperature, air_pressure,
-  soil_moisture, soil_temp_1, soil_temp_2, air_humidity_1, air_temp_1,
-  air_humidity_2, air_temp_2, wind_speed, wind_direction, file_name
+    soil_moisture, soil_temp_1, soil_temp_2, air_humidity_1, air_temp_1,
+    air_humidity_2, air_temp_2, wind_speed, wind_direction, file_name, source
 
-Canonical columns (12 total):
-1. id, 2. timestamp, 3. serial_number, 4. global_radiation, 5. air_temperature,
-6. relative_humidity, 7. wind_speed_avg, 8. wind_direction_1, 9. soil_temperature,
-10. soil_moisture, 11. source, 12. filename
+Canonical columns (17 total):
+1. id, 2. timestamp, 3. serial_number,
+4. ir1_in_lw, 5. sr1_in_sw, 6. ir2_out_lw, 7. sr2_ref_sw,
+8. air_temperature, 9. relative_humidity, 10. air_temp_2, 11. air_humidity_2,
+12. wind_speed_avg, 13. wind_direction_1, 14. soil_temperature,
+15. soil_moisture, 16. source, 17. filename
 '''
+import time
 from pipeline.ingest.base import get_connection
 
 
-# Combine BOTH validated greenroof tables with column mapping to canonical names
+# Harmonize qc_filtered_greenroof with column mapping to canonical names
 HARM_SQL = '''
 CREATE TABLE IF NOT EXISTS harm_greenroof AS
-
--- Empower source: map column names to canonical
 SELECT
     id,
     timestamp,
     serial_no AS serial_number,
-    sr1 AS global_radiation,
+    ir1 AS ir1_in_lw,
+    sr1 AS sr1_in_sw,
+    ir2 AS ir2_out_lw,
+    sr2 AS sr2_ref_sw,
     air_temp_1 AS air_temperature,
     air_humidity_1 AS relative_humidity,
+    air_temp_2 AS air_temp_2,
+    air_humidity_2 AS air_humidity_2,
     wind_speed AS wind_speed_avg,
     wind_direction AS wind_direction_1,
     soil_temp_1 AS soil_temperature,
     soil_moisture,
-    'empower' AS source,
+    source,
     file_name AS filename
-FROM val_ingested_empower_greenroof
-
-UNION ALL
-
--- Kissel source: same schema, just different source marker
-SELECT
-    id,
-    timestamp,
-    serial_no AS serial_number,
-    sr1 AS global_radiation,
-    air_temp_1 AS air_temperature,
-    air_humidity_1 AS relative_humidity,
-    wind_speed AS wind_speed_avg,
-    wind_direction AS wind_direction_1,
-    soil_temp_1 AS soil_temperature,
-    soil_moisture,
-    'kissel' AS source,
-    file_name AS filename
-FROM val_ingested_kissel_greenroof
+FROM qc_filtered_greenroof
 
 ORDER BY timestamp ASC;
 '''
@@ -68,20 +56,23 @@ CREATE INDEX IF NOT EXISTS idx_harm_greenroof_ts_min ON harm_greenroof(date_trun
 
 
 def harmonize_greenroof():
-    '''Combine both validated greenroof sources into canonical harm_greenroof table.'''
+    '''Harmonize qc_filtered_greenroof into canonical harm_greenroof table.'''
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute('DROP TABLE IF EXISTS harm_greenroof;')
+    print('[harmonize_greenroof] Combining Empower + Kissel into canonical schema...', flush=True)
+    t0 = time.time()
     cur.execute(HARM_SQL)
     cur.execute(INDEX_SQL)
+    cur.execute('CLUSTER harm_greenroof USING idx_harm_greenroof_ts;')
+    cur.execute('ANALYZE harm_greenroof;')
 
     conn.commit()
 
-    # Log result
     cur.execute('SELECT COUNT(*) FROM harm_greenroof;')
     count = cur.fetchone()[0]
-    print(f'[harmonize_greenroof] Combined {count} greenroof records into canonical schema.')
+    print(f'[harmonize_greenroof] Combined {count} greenroof records into canonical schema ({time.time() - t0:.1f}s)')
 
     # Show source breakdown
     cur.execute('''

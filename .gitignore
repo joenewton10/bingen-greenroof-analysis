@@ -33,6 +33,7 @@ env/
 .env.*.local
 config/.env
 config/.env.*
+!config/.env.example
 
 # IDE
 .vscode/
@@ -70,17 +71,43 @@ coverage.xml
 *.db
 *.sqlite
 *.sqlite3
-*.log
-*.log.*
-logs/
-outputs/
-data/raw/
+
+# Logs (keep folder structure, exclude log files)
+logs/*
+!logs/.gitkeep
+!logs/README.md
 pipeline_log*
 ingest_log*
 parkplatz_log*
 pipeline_output*
 pipeline_status*
+
+# Raw data (keep folder structure, exclude data files)
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/README.md
+!data/raw/greenroof/
+!data/raw/parkplatz/
+data/raw/greenroof/*
+!data/raw/greenroof/.gitkeep
+!data/raw/greenroof/README.md
+data/raw/parkplatz/*
+!data/raw/parkplatz/.gitkeep
+!data/raw/parkplatz/README.md
+
+# Outputs (keep documentation, exclude generated artifacts)
+outputs/*
+!outputs/.gitkeep
+!outputs/greenroof_qc_shortlist.md
+!outputs/parkplatz_qc_shortlist.md
 test_output/
+
+# Internal thesis context notes (not for public repo)
+context_files/
+
+# Instructions docs (tracked)
+!instructions/
+!instructions/*.md
 
 # Database
 *.dump

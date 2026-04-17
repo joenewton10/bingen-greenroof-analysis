@@ -45,7 +45,9 @@ Actual columns discovered (081000388 file):
 21: Virtual.Bodenfeuchte_korregiert (vol%)
 """
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from psycopg2.extras import execute_values
 from pipeline.ingest.base import get_connection
 from config.settings import GREENROOF_DIR
 
@@ -89,6 +91,21 @@ CREATE TABLE IF NOT EXISTS ingested_kissel_greenroof (
     file_name TEXT
 );
 '''
+
+
+def _print_progress(prefix, current, total, width=32):
+    """Render a single-line ASCII progress bar in the terminal."""
+    if total <= 0:
+        return
+    ratio = min(max(current / total, 0.0), 1.0)
+    filled = int(width * ratio)
+    bar = '#' * filled + '-' * (width - filled)
+    print(f"\r[{prefix}] |{bar}| {current}/{total} ({ratio * 100:5.1f}%)", end='', flush=True)
+
+
+def _default_worker_count():
+    """Use a conservative worker count for parallel file parsing."""
+    return min(8, max(4, (os.cpu_count() or 4)))
 
 
 def is_kissel_greenroof_file(file_path):
@@ -158,6 +175,59 @@ def parse_datetime_iso(date_str):
     return None
 
 
+def _parse_kissel_file(path):
+    """Parse one Kissel file into insert-ready rows."""
+    file = os.path.basename(path)
+
+    if not is_kissel_greenroof_file(path):
+        return []
+
+    with open(path, 'r', encoding='latin-1', errors='ignore') as f:
+        lines = f.readlines()
+
+    if len(lines) < 8:
+        return []
+
+    serial_no = extract_serial_from_kissel(path)
+    rows_to_insert = []
+
+    for line in lines[7:]:
+        line = line.strip()
+        if not line:
+            continue
+
+        row = [cell.strip() for cell in line.split(';')]
+        if len(row) < 10:
+            continue
+
+        timestamp = parse_datetime_iso(row[0])
+        if timestamp is None:
+            continue
+
+        rows_to_insert.append((
+            timestamp,
+            serial_no,
+            None,
+            parse_german_float(row[15]) if len(row) > 15 else None,
+            None,
+            None,
+            None,
+            None,
+            parse_german_float(row[19]) if len(row) > 19 else None,
+            parse_german_float(row[18]) if len(row) > 18 else None,
+            None,
+            parse_german_float(row[12]) if len(row) > 12 else None,
+            parse_german_float(row[9]) if len(row) > 9 else None,
+            None,
+            None,
+            parse_german_float(row[3]) if len(row) > 3 else None,
+            parse_german_float(row[6]) if len(row) > 6 else None,
+            file,
+        ))
+
+    return rows_to_insert
+
+
 def ingest_kissel_greenroof():
     '''Ingest Raw/Kissel (MXmini) greenroof CSVs using positional column mapping.'''
     conn = get_connection()
@@ -183,116 +253,39 @@ def ingest_kissel_greenroof():
     print(f'[ingest_kissel_greenroof] Found {len(files)} CSV files to scan')
     imported_total = 0
 
-    for path in files:
-        file = os.path.basename(path)
+    insert_sql = '''
+        INSERT INTO ingested_kissel_greenroof (
+            timestamp, serial_no,
+            ir1, sr1, ir2, sr2,
+            temperature, air_pressure,
+            soil_moisture, soil_temp_1, soil_temp_2,
+            air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
+            wind_speed, wind_direction,
+            file_name
+        ) VALUES %s
+    '''
 
-        # Validate file format - must be Kissel type
-        if not is_kissel_greenroof_file(path):
-            continue
+    total_files = len(files)
+    _print_progress('ingest_kissel_greenroof', 0, total_files)
+    with ThreadPoolExecutor(max_workers=_default_worker_count()) as executor:
+        futures = {executor.submit(_parse_kissel_file, path): path for path in files}
 
-        try:
-            with open(path, 'r', encoding='latin-1', errors='ignore') as f:
-                lines = f.readlines()
+        for idx, future in enumerate(as_completed(futures), start=1):
+            path = futures[future]
+            file = os.path.basename(path)
+            try:
+                rows_to_insert = future.result()
+                if rows_to_insert:
+                    execute_values(cur, insert_sql, rows_to_insert, page_size=1000)
+                    imported_total += len(rows_to_insert)
+                if idx % 50 == 0:
+                    conn.commit()
+            except Exception as e:
+                print(f'[ingest_kissel_greenroof] Error in {file}: {e}')
+            finally:
+                _print_progress('ingest_kissel_greenroof', idx, total_files)
 
-            if len(lines) < 8:  # Need at least header + units + 1 data row
-                print(f'[ingest_kissel_greenroof] File too short: {file}')
-                continue
-
-            serial_no = extract_serial_from_kissel(path)
-
-            # Data starts at line 7 (skip metadata 0-4, header 5, units 6)
-            data_start = 7
-            rows_imported = 0
-
-            for line_num, line in enumerate(lines[data_start:], start=data_start):
-                line = line.strip()
-                if not line:
-                    continue
-
-                row = [cell.strip() for cell in line.split(';')]
-
-                # Skip rows that don't have enough columns (need at least timestamp + some data)
-                if len(row) < 10:
-                    continue
-
-                # POSITIONAL column mapping based on discovered format:
-                # 0: Timestamp
-                timestamp = parse_datetime_iso(row[0])
-
-                if timestamp is None:
-                    continue
-
-                # 1: Battery voltage (skip - not in target schema)
-                # 2: Precipitation (skip - not in target schema)
-
-                # 3-5: Wind speed AVG/MAX/MIN - use AVG
-                wind_speed = parse_german_float(row[3]) if len(row) > 3 else None
-
-                # 6-8: Wind direction (3 columns) - use first
-                wind_direction = parse_german_float(row[6]) if len(row) > 6 else None
-
-                # 9-11: Air temperature AVG/MAX/MIN - use AVG
-                air_temp_1 = parse_german_float(row[9]) if len(row) > 9 else None
-
-                # 12-14: Relative humidity AVG/MAX/MIN - use AVG
-                air_humidity_1 = parse_german_float(row[12]) if len(row) > 12 else None
-
-                # 15-17: Global radiation AVG/MAX/MIN - map to sr1
-                sr1 = parse_german_float(row[15]) if len(row) > 15 else None
-
-                # 18: Soil temperature
-                soil_temp_1 = parse_german_float(row[18]) if len(row) > 18 else None
-
-                # 19: Soil moisture
-                soil_moisture = parse_german_float(row[19]) if len(row) > 19 else None
-
-                # Fields not in Kissel files - set to None
-                ir1 = None
-                ir2 = None
-                sr2 = None
-                temperature = None
-                air_pressure = None
-                soil_temp_2 = None
-                air_humidity_2 = None
-                air_temp_2 = None
-
-                cur.execute('''
-                    INSERT INTO ingested_kissel_greenroof (
-                        timestamp, serial_no,
-                        ir1, sr1, ir2, sr2,
-                        temperature, air_pressure,
-                        soil_moisture, soil_temp_1, soil_temp_2,
-                        air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
-                        wind_speed, wind_direction,
-                        file_name
-                    ) VALUES (
-                        %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s
-                    )
-                ''', (
-                    timestamp, serial_no,
-                    ir1, sr1, ir2, sr2,
-                    temperature, air_pressure,
-                    soil_moisture, soil_temp_1, soil_temp_2,
-                    air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
-                    wind_speed, wind_direction,
-                    file
-                ))
-                rows_imported += 1
-
-            imported_total += rows_imported
-            print(f'[ingest_kissel_greenroof] {file}: {rows_imported} rows')
-
-        except Exception as e:
-            print(f'[ingest_kissel_greenroof] Error in {file}: {e}')
-            import traceback
-            traceback.print_exc()
-            continue
+    print()
 
     conn.commit()
     print(f'[ingest_kissel_greenroof] Total: {imported_total} rows ingested.')
@@ -300,6 +293,9 @@ def ingest_kissel_greenroof():
     # Create index for efficient timestamp ordering
     print('[ingest_kissel_greenroof] Creating timestamp index...')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ingested_kissel_greenroof_ts ON ingested_kissel_greenroof(timestamp ASC);')
+    print('[ingest_kissel_greenroof] Clustering table by timestamp...')
+    cur.execute('CLUSTER ingested_kissel_greenroof USING idx_ingested_kissel_greenroof_ts;')
+    cur.execute('ANALYZE ingested_kissel_greenroof;')
     conn.commit()
     
     cur.close()

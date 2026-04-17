@@ -20,9 +20,11 @@ import os
 import re
 import csv
 import gc
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pandas as pd
 import numpy as np
+from psycopg2.extras import execute_values
 from pipeline.ingest.base import get_connection
 from config.settings import PARKPLATZ_DIR
 
@@ -106,22 +108,35 @@ CREATE TABLE IF NOT EXISTS ingested_parkplatz (
 '''
 
 
-def clean_colname(name):
-    '''Clean column name for comparison/mapping.'''
-    return re.sub(r'[\s/\[\]\(\)\.,:;"\'-]', '_', name)
+def _print_progress(prefix, current, total, width=32):
+    """Render a single-line ASCII progress bar in the terminal."""
+    if total <= 0:
+        return
+    ratio = min(max(current / total, 0.0), 1.0)
+    filled = int(width * ratio)
+    bar = '#' * filled + '-' * (width - filled)
+    print(f"\r[{prefix}] |{bar}| {current}/{total} ({ratio * 100:5.1f}%)", end='', flush=True)
 
 
-def find_data_start(filepath):
-    '''Find line number where data starts.'''
-    def is_semicolon_line(line):
-        return bool(re.match(r'^\s*;{5,}\s*$', line))
+def _default_worker_count():
+    """Use a conservative worker count for parallel file parsing."""
+    return min(8, max(4, (os.cpu_count() or 4)))
 
+
+def _read_text_lines(filepath):
+    """Read a CSV file once using utf-8 or latin-1 fallback."""
     try:
         with open(filepath, encoding='utf-8') as f:
-            lines = f.readlines()
+            return f.readlines()
     except UnicodeDecodeError:
         with open(filepath, encoding='latin-1') as f:
-            lines = f.readlines()
+            return f.readlines()
+
+
+def _find_data_start_in_lines(lines):
+    """Find line number where data starts using already-loaded lines."""
+    def is_semicolon_line(line):
+        return bool(re.match(r'^\s*;{5,}\s*$', line))
 
     for i, line in enumerate(lines):
         if is_semicolon_line(line):
@@ -135,6 +150,16 @@ def find_data_start(filepath):
         if 'Nr' in line or ';' in line:
             return i + 1
     return None
+
+
+def clean_colname(name):
+    '''Clean column name for comparison/mapping.'''
+    return re.sub(r'[\s/\[\]\(\)\.,:;"\'-]', '_', name)
+
+
+def find_data_start(filepath):
+    '''Find line number where data starts.'''
+    return _find_data_start_in_lines(_read_text_lines(filepath))
 
 
 def extract_name_unit(h):
@@ -162,17 +187,23 @@ def extract_name_unit(h):
 
 def convert_column_numeric(series):
     '''
-    Vectorized numeric conversion that treats the FIRST comma as decimal separator,
-    then removes remaining commas (handles the corrupt -83,511,000 format).
+    Vectorized numeric conversion.
+        - Any comma-formatted value uses first comma as decimal separator.
+            Examples: "42,406,000" -> 42.406, "-120,199,000.0" -> -120.199
+        - Single comma values (e.g. "1,5") remain standard decimal comma.
     '''
     s = series.fillna('').astype(str).str.strip()
     s = s.str.replace('\xa0', '', regex=False).str.replace(' ', '', regex=False)
 
     has_comma = s.str.contains(',', regex=False)
     if has_comma.any():
+        # Use first comma as decimal separator and strip the rest.
+        # This handles corrupted forms like "6,333,000,000" -> 6.333 and "1,44,0,000" -> 1.44.
         parts = s[has_comma].str.split(',', n=1)
-        right = parts.str[1].fillna('').str.replace(',', '', regex=False)
         left = parts.str[0].fillna('')
+        right = parts.str[1].fillna('')
+        right = right.str.replace(',', '', regex=False).str.replace('.', '', regex=False)
+        s = s.copy()
         s.loc[has_comma] = left + '.' + right
 
     s = s.str.replace(r'[^0-9\.\-]', '', regex=True)
@@ -201,8 +232,10 @@ def convert_scalar_numeric(value):
     s = s.replace('\xa0', '').replace(' ', '')
 
     if ',' in s:
+        # Use first comma as decimal separator and strip the rest.
         left, right = s.split(',', 1)
-        s = left + '.' + right.replace(',', '')
+        right = right.replace(',', '').replace('.', '')
+        s = left + '.' + right
 
     s = re.sub(r'[^0-9\.\-]', '', s)
 
@@ -448,16 +481,10 @@ DB_COL_MAP = {
 
 def read_csv_clean(filepath):
     '''Read and clean a Parkplatz CSV file.'''
-    data_start = find_data_start(filepath)
+    lines = _read_text_lines(filepath)
+    data_start = _find_data_start_in_lines(lines)
     if data_start is None:
         raise ValueError(f"Could not find data start in {filepath}")
-
-    try:
-        with open(filepath, encoding='utf-8') as f:
-            lines = f.readlines()
-    except UnicodeDecodeError:
-        with open(filepath, encoding='latin-1') as f:
-            lines = f.readlines()
 
     header_line = lines[data_start - 1].strip()
     
@@ -490,38 +517,18 @@ def read_csv_clean(filepath):
 
     # Read data rows
     raw_rows = []
-    try:
-        with open(filepath, encoding='utf-8') as f:
-            reader = csv.reader(f, delimiter=';')
-            for i, row in enumerate(reader):
-                if i < data_start:
-                    continue
-                while row and (row[-1] == '' or row[-1] is None):
-                    row.pop()
-                if not raw_rows and row:
-                    row[0] = row[0].lstrip('\ufeff')
-                if len(row) != len(header):
-                    if len(row) < len(header):
-                        row = row + [''] * (len(header) - len(row))
-                    else:
-                        row = row[:len(header)]
-                raw_rows.append(row)
-    except UnicodeDecodeError:
-        with open(filepath, encoding='latin-1') as f:
-            reader = csv.reader(f, delimiter=';')
-            for i, row in enumerate(reader):
-                if i < data_start:
-                    continue
-                while row and (row[-1] == '' or row[-1] is None):
-                    row.pop()
-                if not raw_rows and row:
-                    row[0] = row[0].lstrip('\ufeff')
-                if len(row) != len(header):
-                    if len(row) < len(header):
-                        row = row + [''] * (len(header) - len(row))
-                    else:
-                        row = row[:len(header)]
-                raw_rows.append(row)
+    reader = csv.reader(lines[data_start:], delimiter=';')
+    for row in reader:
+        while row and (row[-1] == '' or row[-1] is None):
+            row.pop()
+        if not raw_rows and row:
+            row[0] = row[0].lstrip('\ufeff')
+        if len(row) != len(header):
+            if len(row) < len(header):
+                row = row + [''] * (len(header) - len(row))
+            else:
+                row = row[:len(header)]
+        raw_rows.append(row)
 
     if not raw_rows:
         return pd.DataFrame(columns=FINAL_COLS)
@@ -583,54 +590,78 @@ def read_csv_clean(filepath):
     # Filter out rows without valid dates
     df = df[df['Date / Time'].notna()]
 
+    if not df.empty:
+        df['Date / Time'] = pd.to_datetime(df['Date / Time'], errors='coerce')
+        df = df[df['Date / Time'].notna()].sort_values('Date / Time', kind='stable')
+
     return df
 
 
-def _insert_batch(conn, df, batch_size=1000):
-    '''Insert DataFrame rows into ingested_parkplatz.'''
-    if df.empty:
+_NON_NUMERIC_COLS = {'No.', 'Date / Time', 'Serial Number', 'source_file'}
+
+
+def _prepare_insert_records(df):
+    '''Prepare insert records in FINAL_COL order with minimal Python overhead.'''
+    if df is None or df.empty:
+        return []
+
+    prepared = df.reindex(columns=FINAL_COLS).copy()
+    prepared['Date / Time'] = pd.to_datetime(prepared['Date / Time'], errors='coerce')
+    prepared = prepared[prepared['Date / Time'].notna()].sort_values('Date / Time', kind='stable')
+
+    for col in ('No.', 'Serial Number', 'source_file'):
+        if col in prepared.columns:
+            prepared[col] = prepared[col].map(lambda value: None if pd.isna(value) else str(value).strip())
+
+    # Safety net: ensure no raw strings reach psycopg2 for numeric DB columns.
+    # This catches any column that slipped through convert_column_numeric in read_csv_clean.
+    for col in prepared.columns:
+        if col not in _NON_NUMERIC_COLS:
+            if pd.api.types.is_object_dtype(prepared[col]) or pd.api.types.is_string_dtype(prepared[col]):
+                prepared[col] = convert_column_numeric(prepared[col])
+
+    prepared = prepared.where(pd.notna(prepared), None)
+    return list(prepared.itertuples(index=False, name=None))
+
+
+def _insert_records(conn, records, batch_size=1000):
+    '''Insert prepared tuple records into ingested_parkplatz.'''
+    if not records:
         return 0
 
     cur = conn.cursor()
     inserted = 0
 
     db_cols = [DB_COL_MAP[col] for col in FINAL_COLS if col in DB_COL_MAP]
+    col_names = ', '.join(db_cols)
+    insert_sql = f'''
+        INSERT INTO ingested_parkplatz ({col_names})
+        VALUES %s
+    '''
 
-    for start in range(0, len(df), batch_size):
-        batch = df.iloc[start:start + batch_size]
+    for start in range(0, len(records), batch_size):
+        rows_to_insert = records[start:start + batch_size]
+        if rows_to_insert:
+            execute_values(cur, insert_sql, rows_to_insert, page_size=batch_size)
+            inserted += len(rows_to_insert)
 
-        for _, row in batch.iterrows():
-            values = []
-            for col in FINAL_COLS:
-                val = row.get(col)
-                if pd.isna(val):
-                    values.append(None)
-                elif col == 'Date / Time':
-                    try:
-                        ts = pd.to_datetime(val, errors='coerce')
-                        values.append(ts if not pd.isna(ts) else None)
-                    except:
-                        values.append(None)
-                elif col in ('source_file', 'Serial Number'):
-                    values.append(str(val).strip())
-                else:
-                    if isinstance(val, str):
-                        values.append(convert_scalar_numeric(val))
-                    else:
-                        values.append(val)
-
-            placeholders = ', '.join(['%s'] * len(db_cols))
-            col_names = ', '.join(db_cols)
-
-            cur.execute(f'''
-                INSERT INTO ingested_parkplatz ({col_names})
-                VALUES ({placeholders})
-            ''', values)
-            inserted += 1
-
-    conn.commit()
     cur.close()
     return inserted
+
+
+def _parse_parkplatz_file(filepath):
+    '''Parse one Parkplatz CSV and return timestamp metadata plus ordered insert records.'''
+    df = read_csv_clean(filepath)
+    records = _prepare_insert_records(df)
+    if not records:
+        return filepath, None, records
+    return filepath, records[0][1], records
+
+
+def _insert_batch(conn, df, batch_size=1000):
+    '''Insert DataFrame rows into ingested_parkplatz.'''
+    records = _prepare_insert_records(df)
+    return _insert_records(conn, records, batch_size=batch_size)
 
 
 def ingest_parkplatz():
@@ -661,29 +692,53 @@ def ingest_parkplatz():
             if f.lower().endswith('.csv') and os.path.isfile(fpath):
                 all_files.append(fpath)
 
-    print(f"[ingest_parkplatz] Processing {len(all_files)} total CSV files...")
+    all_files = sorted(all_files)
+    total_files = len(all_files)
+    print(f"[ingest_parkplatz] Processing {total_files} total CSV files...")
+    _print_progress('ingest_parkplatz', 0, total_files)
 
     total_rows = 0
-    for i, fpath in enumerate(all_files, 1):
-        print(f"[{i}/{len(all_files)}] {os.path.basename(fpath)}")
-        try:
-            df = read_csv_clean(fpath)
-            if df is not None and not df.empty:
-                rows = _insert_batch(conn, df)
-                total_rows += rows
-                print(f"  Inserted {rows} rows")
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            conn.rollback()  # Reset transaction state after error
-            continue
+    processed_files = 0
+    chunk_size = _default_worker_count() * 4
 
-        if i % 50 == 0:
-            gc.collect()
+    for chunk_start in range(0, total_files, chunk_size):
+        chunk_files = all_files[chunk_start:chunk_start + chunk_size]
+        parsed_results = []
+
+        with ThreadPoolExecutor(max_workers=_default_worker_count()) as executor:
+            futures = {executor.submit(_parse_parkplatz_file, fpath): fpath for fpath in chunk_files}
+            for future in as_completed(futures):
+                fpath = futures[future]
+                try:
+                    parsed_results.append(future.result())
+                except Exception as e:
+                    print(f"  ERROR in {os.path.basename(fpath)}: {e}")
+                finally:
+                    processed_files += 1
+                    _print_progress('ingest_parkplatz', processed_files, total_files)
+
+        parsed_results.sort(key=lambda item: (
+            pd.Timestamp.max if item[1] is None else pd.Timestamp(item[1]),
+            item[0],
+        ))
+
+        for _, _, records in parsed_results:
+            if not records:
+                continue
+            total_rows += _insert_records(conn, records)
+
+        conn.commit()
+        gc.collect()
+
+    print()
 
     # Create index for efficient timestamp ordering
     print('[ingest_parkplatz] Creating timestamp index...')
     cur = conn.cursor()
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ingested_parkplatz_ts ON ingested_parkplatz(timestamp ASC);')
+    print('[ingest_parkplatz] Clustering table by timestamp...')
+    cur.execute('CLUSTER ingested_parkplatz USING idx_ingested_parkplatz_ts;')
+    cur.execute('ANALYZE ingested_parkplatz;')
     conn.commit()
     cur.close()
     

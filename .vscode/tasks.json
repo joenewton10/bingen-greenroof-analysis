@@ -12,8 +12,26 @@
 				"dashboard/app.py"
 			],
 			"isBackground": true,
-			"problemMatcher": [],
-			"group": "build"
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "Pipeline dry-run check",
+			"type": "shell",
+			"command": "c:/Users/Joe/Analysis code/bingen_greenroof_pipeline/.venv/Scripts/python.exe",
+			"args": [
+				"scripts/run_pipeline.py",
+				"--dry-run"
+			],
+			"isBackground": false,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
 		}
 	]
 }

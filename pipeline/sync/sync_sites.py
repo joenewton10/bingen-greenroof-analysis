@@ -4,44 +4,17 @@ Sync Sites - Synchronize greenroof and parkplatz data per minute.
 Based on: synchronize+filter_data_code.py
 
 Table naming convention for Bingen pipeline:
-- Parkplatz source: val_ingested_parkplatz
+- Parkplatz source: harm_parkplatz
 - Greenroof source: harm_greenroof
-- Outputs: harm_parkplatz, synchronized_data_filtered
+- Output: synchronized_data_filtered
 
 Final output table: synchronized_data_filtered
-- 24 columns total (see canonical columns documentation)
+- Includes dual-level availability flags and thesis-derived metrics
 - Minute-level aggregation with AVG and ROUND(..., 3)
 - HAVING filters for outlier removal
 '''
+import time
 from pipeline.ingest.base import get_connection
-
-
-# Harmonize parkplatz to use quoted column names matching reference
-# Reference uses: "IR1 [W/m2]", "Air Temp 1 [C]", etc.
-HARM_PARKPLATZ_SQL = '''
-CREATE TABLE IF NOT EXISTS harm_parkplatz AS
-SELECT
-    id,
-    timestamp,
-    ir1_wm2 AS "IR1 [W/m2]",
-    sr1_wm2 AS "SR1 [W/m2]",
-    ir2_wm2 AS "IR2 [W/m2]",
-    sr2_wm2 AS "SR2 [W/m2]",
-    temp_c AS "Temp [C]",
-    air_pressure_mbar AS "Air Pressure [mbar]",
-    soil_moisture_vol AS "Soil Moisture [vol%]",
-    air_humidity_1_rh AS "Air Humidity 1 [%RH]",
-    air_temp_1_c AS "Air Temp 1 [C]",
-    air_humidity_2_rh AS "Air Humidity 2 [%RH]",
-    air_temp_2_c AS "Air Temp 2 [C]",
-    wind_speed_ms AS "Wind Speed [m/s]",
-    wind_direction_deg AS "Wind Direction [deg]",
-    soil_temp_1_c AS "Soil Temp 1 [C]",
-    soil_temp_2_c AS "Soil Temp 2 [C]",
-    serial_number
-FROM val_ingested_parkplatz
-ORDER BY timestamp ASC;
-'''
 
 # Synchronized data: minute-level aggregation matching reference exactly
 # Output columns match synchronize+filter_data_code.py
@@ -67,28 +40,55 @@ SELECT
     ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) AS avg_soil_temp_1_parkplatz,
     ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) AS avg_soil_temp_2_parkplatz,
 
-    -- Greenroof sensor averages (6 columns)
+    -- Greenroof sensor averages
+    ROUND(AVG(g.ir1_in_lw::numeric), 3) AS avg_ir1_greenroof,
     ROUND(AVG(g.air_temperature::numeric), 3) AS avg_air_temperature_greenroof,
-    ROUND(AVG(g.relative_humidity::numeric), 3) AS avg_relative_humidity_greenroof,
+    ROUND(AVG(g.air_temp_2::numeric), 3) AS avg_air_temp_2_greenroof,
+    ROUND(AVG(g.relative_humidity::numeric), 3) AS avg_air_humidity_1_greenroof,
+    ROUND(AVG(g.air_humidity_2::numeric), 3) AS avg_air_humidity_2_greenroof,
     ROUND(AVG(g.wind_speed_avg::numeric), 3) AS avg_wind_speed_greenroof,
     ROUND(AVG(g.soil_temperature::numeric), 3) AS avg_soil_temperature_greenroof,
     ROUND(AVG(g.soil_moisture::numeric), 3) AS avg_soil_moisture_greenroof,
-    ROUND(AVG(g.global_radiation::numeric), 3) AS avg_global_radiation_greenroof,
+    ROUND(AVG(g.sr1_in_sw::numeric), 3) AS avg_global_radiation_greenroof,
+    ROUND(AVG(g.sr2_ref_sw::numeric), 3) AS avg_sr2_greenroof,
+    ROUND(AVG(g.ir2_out_lw::numeric), 3) AS avg_ir2_greenroof,
 
     -- Record counts for quality assessment
     COUNT(p.id) AS parkplatz_record_count,
     COUNT(g.id) AS greenroof_record_count,
 
+    -- Data availability: dual-level instrumentation on greenroof
+    (AVG(g.air_temp_2::numeric) IS NOT NULL AND AVG(g.air_humidity_2::numeric) IS NOT NULL) AS has_dual_level_greenroof,
+    CASE
+        WHEN AVG(g.air_temp_2::numeric) IS NOT NULL AND AVG(g.air_humidity_2::numeric) IS NOT NULL THEN 'dual_level'
+        ELSE 'single_level'
+    END AS measurement_period,
+
     -- Computed columns: Temperature differences (cooling effect indicators)
     ROUND(AVG(g.air_temperature::numeric) - AVG(p."Air Temp 1 [C]"::numeric), 3) AS temp_diff_1,
     ROUND(AVG(g.air_temperature::numeric) - AVG(p."Air Temp 2 [C]"::numeric), 3) AS temp_diff_2,
+    ROUND(AVG(g.air_temperature::numeric) - AVG(g.air_temp_2::numeric), 3) AS delta_t_roof,
+    ROUND(AVG(g.relative_humidity::numeric) - AVG(g.air_humidity_2::numeric), 3) AS delta_rh_roof,
+    ROUND(AVG(p."Air Temp 1 [C]"::numeric) - AVG(p."Air Temp 2 [C]"::numeric), 3) AS delta_t_parkplatz,
+    ROUND(AVG(p."Air Humidity 1 [%RH]"::numeric) - AVG(p."Air Humidity 2 [%RH]"::numeric), 3) AS delta_rh_parkplatz,
 
     -- Computed columns: Energy calculations (Stefan-Boltzmann: σ=5.67e-8, ε=0.95)
     ROUND(AVG(p."IR1 [W/m2]"::numeric) + POWER(AVG(p."Temp [C]"::numeric) + 273.15, 4) * 5.67e-8 * 0.95, 3) AS energy_from_air_parkplatz,
     ROUND(AVG(p."IR2 [W/m2]"::numeric) + POWER(AVG(p."Temp [C]"::numeric) + 273.15, 4) * 5.67e-8 * 0.95, 3) AS energy_from_surface_parkplatz,
 
-    -- Computed column: Radiation balance (net radiation)
-    ROUND(AVG(p."SR1 [W/m2]"::numeric) - AVG(p."SR2 [W/m2]"::numeric) + AVG(p."IR1 [W/m2]"::numeric) - AVG(p."IR2 [W/m2]"::numeric), 3) AS radiation_balance_parkplatz
+    -- Computed columns: Radiation balance and albedo
+    ROUND(AVG(g.sr1_in_sw::numeric) - AVG(g.sr2_ref_sw::numeric) + AVG(g.ir1_in_lw::numeric) - AVG(g.ir2_out_lw::numeric), 3) AS radiation_balance_greenroof,
+    ROUND(AVG(p."SR1 [W/m2]"::numeric) - AVG(p."SR2 [W/m2]"::numeric) + AVG(p."IR1 [W/m2]"::numeric) - AVG(p."IR2 [W/m2]"::numeric), 3) AS radiation_balance_parkplatz,
+    ROUND(
+        AVG(g.sr2_ref_sw::numeric)
+        / NULLIF(CASE WHEN AVG(g.sr1_in_sw::numeric) >= 10 THEN AVG(g.sr1_in_sw::numeric) END, 0),
+        4
+    ) AS albedo_greenroof,
+    ROUND(
+        AVG(p."SR2 [W/m2]"::numeric)
+        / NULLIF(CASE WHEN AVG(p."SR1 [W/m2]"::numeric) >= 10 THEN AVG(p."SR1 [W/m2]"::numeric) END, 0),
+        4
+    ) AS albedo_parkplatz
 
 FROM harm_greenroof g
 INNER JOIN harm_parkplatz p
@@ -130,30 +130,6 @@ INDEX_SYNC_SQL = '''
 CREATE INDEX IF NOT EXISTS idx_sync_filtered_timestamp ON synchronized_data_filtered(timestamp);
 '''
 
-INDEX_HARM_PARKPLATZ_SQL = '''
-CREATE INDEX IF NOT EXISTS idx_harm_parkplatz_ts ON harm_parkplatz(timestamp);
-CREATE INDEX IF NOT EXISTS idx_harm_parkplatz_ts_min ON harm_parkplatz(date_trunc('minute', timestamp));
-'''
-
-
-def harmonize_parkplatz():
-    '''Harmonize parkplatz to quoted column names matching reference.'''
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute('DROP TABLE IF EXISTS harm_parkplatz;')
-    cur.execute(HARM_PARKPLATZ_SQL)
-    cur.execute(INDEX_HARM_PARKPLATZ_SQL)
-
-    conn.commit()
-
-    cur.execute('SELECT COUNT(*) FROM harm_parkplatz;')
-    count = cur.fetchone()[0]
-    print(f'[harmonize_parkplatz] Harmonized {count} parkplatz records.')
-
-    cur.close()
-    conn.close()
-
 
 def sync_data():
     '''Synchronize greenroof and parkplatz data per minute with production filters.'''
@@ -161,14 +137,18 @@ def sync_data():
     cur = conn.cursor()
 
     cur.execute('DROP TABLE IF EXISTS synchronized_data_filtered;')
+    print('[sync_data] Joining greenroof + parkplatz per minute (this may take a while)...', flush=True)
+    t0 = time.time()
     cur.execute(SYNC_SQL)
     cur.execute(INDEX_SYNC_SQL)
+    cur.execute('CLUSTER synchronized_data_filtered USING idx_sync_filtered_timestamp;')
+    cur.execute('ANALYZE synchronized_data_filtered;')
 
     conn.commit()
 
     cur.execute('SELECT COUNT(*) FROM synchronized_data_filtered;')
     count = cur.fetchone()[0]
-    print(f'[sync_data] Synchronized {count} minute-level records.')
+    print(f'[sync_data] Synchronized {count} minute-level records ({time.time() - t0:.1f}s)')
 
     # Show data quality summary
     cur.execute('''

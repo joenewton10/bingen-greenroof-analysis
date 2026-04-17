@@ -20,7 +20,9 @@ KEPT columns (17 total):
 - file_name
 """
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from psycopg2.extras import execute_values
 from pipeline.ingest.base import get_connection
 from config.settings import GREENROOF_DIR
 
@@ -64,6 +66,21 @@ CREATE TABLE IF NOT EXISTS ingested_empower_greenroof (
     file_name TEXT
 );
 '''
+
+
+def _print_progress(prefix, current, total, width=32):
+    """Render a single-line ASCII progress bar in the terminal."""
+    if total <= 0:
+        return
+    ratio = min(max(current / total, 0.0), 1.0)
+    filled = int(width * ratio)
+    bar = '#' * filled + '-' * (width - filled)
+    print(f"\r[{prefix}] |{bar}| {current}/{total} ({ratio * 100:5.1f}%)", end='', flush=True)
+
+
+def _default_worker_count():
+    """Use a conservative worker count for parallel file parsing."""
+    return min(8, max(4, (os.cpu_count() or 4)))
 
 
 def is_empower_greenroof_file(file_path):
@@ -129,6 +146,68 @@ def extract_serial_number(file_path):
     return None
 
 
+def _parse_empower_file(path):
+    """Parse one Empower file into insert-ready rows."""
+    file = os.path.basename(path)
+
+    if not is_empower_greenroof_file(path):
+        return []
+
+    with open(path, 'r', encoding='latin-1', errors='ignore') as f:
+        lines = f.readlines()
+
+    if len(lines) < 18:
+        return []
+
+    serial_no = extract_serial_number(path)
+
+    header_line_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith('Nr.;Datum') or ('Nr.;' in line and 'Datum' in line):
+            header_line_idx = i
+            break
+
+    if header_line_idx is None:
+        return []
+
+    rows_to_insert = []
+    data_start = header_line_idx + 1
+    for line in lines[data_start:]:
+        if not line.strip():
+            continue
+
+        row = [cell.strip() for cell in line.strip().split(';')]
+        if len(row) < 25 or not row[0].isdigit():
+            continue
+
+        timestamp = parse_datetime_german(row[1]) if len(row) > 1 else None
+        if timestamp is None:
+            continue
+
+        rows_to_insert.append((
+            timestamp,
+            serial_no,
+            parse_german_float(row[2]) if len(row) > 2 else None,
+            parse_german_float(row[3]) if len(row) > 3 else None,
+            parse_german_float(row[4]) if len(row) > 4 else None,
+            parse_german_float(row[5]) if len(row) > 5 else None,
+            parse_german_float(row[6]) if len(row) > 6 else None,
+            parse_german_float(row[7]) if len(row) > 7 else None,
+            parse_german_float(row[8]) if len(row) > 8 else None,
+            parse_german_float(row[15]) if len(row) > 15 else None,
+            parse_german_float(row[16]) if len(row) > 16 else None,
+            parse_german_float(row[9]) if len(row) > 9 else None,
+            parse_german_float(row[10]) if len(row) > 10 else None,
+            parse_german_float(row[11]) if len(row) > 11 else None,
+            parse_german_float(row[12]) if len(row) > 12 else None,
+            parse_german_float(row[13]) if len(row) > 13 else None,
+            parse_german_float(row[14]) if len(row) > 14 else None,
+            file,
+        ))
+
+    return rows_to_insert
+
+
 def ingest_empower_greenroof():
     '''Ingest Empower-Gruendach CSVs using positional column mapping.'''
     conn = get_connection()
@@ -154,106 +233,39 @@ def ingest_empower_greenroof():
     print(f'[ingest_empower_greenroof] Found {len(files)} CSV files to scan')
     imported_total = 0
 
-    for path in files:
-        file = os.path.basename(path)
+    insert_sql = '''
+        INSERT INTO ingested_empower_greenroof (
+            timestamp, serial_no,
+            ir1, sr1, ir2, sr2,
+            temperature, air_pressure,
+            soil_moisture, soil_temp_1, soil_temp_2,
+            air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
+            wind_speed, wind_direction,
+            file_name
+        ) VALUES %s
+    '''
 
-        # Validate file format - must be Empower type
-        if not is_empower_greenroof_file(path):
-            continue
+    total_files = len(files)
+    _print_progress('ingest_empower_greenroof', 0, total_files)
+    with ThreadPoolExecutor(max_workers=_default_worker_count()) as executor:
+        futures = {executor.submit(_parse_empower_file, path): path for path in files}
 
-        try:
-            with open(path, 'r', encoding='latin-1', errors='ignore') as f:
-                lines = f.readlines()
+        for idx, future in enumerate(as_completed(futures), start=1):
+            path = futures[future]
+            file = os.path.basename(path)
+            try:
+                rows_to_insert = future.result()
+                if rows_to_insert:
+                    execute_values(cur, insert_sql, rows_to_insert, page_size=1000)
+                    imported_total += len(rows_to_insert)
+                if idx % 50 == 0:
+                    conn.commit()
+            except Exception as e:
+                print(f'[ingest_empower_greenroof] Error in {file}: {e}')
+            finally:
+                _print_progress('ingest_empower_greenroof', idx, total_files)
 
-            if len(lines) < 18:
-                print(f'[ingest_empower_greenroof] File too short: {file}')
-                continue
-
-            # Extract serial number
-            serial_no = extract_serial_number(path)
-
-            # Find header line (Nr.;Datum)
-            header_line_idx = None
-            for i, line in enumerate(lines):
-                if line.strip().startswith('Nr.;Datum') or ('Nr.;' in line and 'Datum' in line):
-                    header_line_idx = i
-                    break
-
-            if header_line_idx is None:
-                print(f'[ingest_empower_greenroof] No header found in {file}')
-                continue
-
-            # Process data rows
-            data_start = header_line_idx + 1
-            rows_imported = 0
-
-            for line in lines[data_start:]:
-                if not line.strip():
-                    continue
-
-                row = [cell.strip() for cell in line.strip().split(';')]
-
-                # Validate: need enough columns and first must be record number
-                if len(row) < 25 or not row[0].isdigit():
-                    continue
-
-                # POSITIONAL column mapping (matching empower_greenroof_code.py)
-                timestamp = parse_datetime_german(row[1]) if len(row) > 1 else None
-
-                if timestamp is None:
-                    continue
-
-                ir1 = parse_german_float(row[2]) if len(row) > 2 else None
-                sr1 = parse_german_float(row[3]) if len(row) > 3 else None
-                ir2 = parse_german_float(row[4]) if len(row) > 4 else None
-                sr2 = parse_german_float(row[5]) if len(row) > 5 else None
-                temperature = parse_german_float(row[6]) if len(row) > 6 else None
-                air_pressure = parse_german_float(row[7]) if len(row) > 7 else None
-                soil_moisture = parse_german_float(row[8]) if len(row) > 8 else None
-                air_humidity_1 = parse_german_float(row[9]) if len(row) > 9 else None
-                air_temp_1 = parse_german_float(row[10]) if len(row) > 10 else None
-                air_humidity_2 = parse_german_float(row[11]) if len(row) > 11 else None
-                air_temp_2 = parse_german_float(row[12]) if len(row) > 12 else None
-                wind_speed = parse_german_float(row[13]) if len(row) > 13 else None
-                wind_direction = parse_german_float(row[14]) if len(row) > 14 else None
-                soil_temp_1 = parse_german_float(row[15]) if len(row) > 15 else None
-                soil_temp_2 = parse_german_float(row[16]) if len(row) > 16 else None
-
-                cur.execute('''
-                    INSERT INTO ingested_empower_greenroof (
-                        timestamp, serial_no,
-                        ir1, sr1, ir2, sr2,
-                        temperature, air_pressure,
-                        soil_moisture, soil_temp_1, soil_temp_2,
-                        air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
-                        wind_speed, wind_direction,
-                        file_name
-                    ) VALUES (
-                        %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s
-                    )
-                ''', (
-                    timestamp, serial_no,
-                    ir1, sr1, ir2, sr2,
-                    temperature, air_pressure,
-                    soil_moisture, soil_temp_1, soil_temp_2,
-                    air_humidity_1, air_temp_1, air_humidity_2, air_temp_2,
-                    wind_speed, wind_direction,
-                    file
-                ))
-                rows_imported += 1
-
-            imported_total += rows_imported
-            print(f'[ingest_empower_greenroof] {file}: {rows_imported} rows')
-
-        except Exception as e:
-            print(f'[ingest_empower_greenroof] Error in {file}: {e}')
-            continue
+    print()
 
     conn.commit()
     print(f'[ingest_empower_greenroof] Total: {imported_total} rows ingested.')
@@ -261,6 +273,9 @@ def ingest_empower_greenroof():
     # Create index for efficient timestamp ordering
     print('[ingest_empower_greenroof] Creating timestamp index...')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ingested_empower_greenroof_ts ON ingested_empower_greenroof(timestamp ASC);')
+    print('[ingest_empower_greenroof] Clustering table by timestamp...')
+    cur.execute('CLUSTER ingested_empower_greenroof USING idx_ingested_empower_greenroof_ts;')
+    cur.execute('ANALYZE ingested_empower_greenroof;')
     conn.commit()
     
     cur.close()

@@ -2,7 +2,7 @@
 from dotenv import load_dotenv
 
 # Load environment variables from config/.env
-load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'), override=True)
 
 DB_CONFIG = {
     "dbname": os.getenv("DB_NAME"),
