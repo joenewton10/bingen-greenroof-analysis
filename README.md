@@ -137,8 +137,8 @@ bingen_greenroof_pipeline/
 - Raw datasets and large generated artifacts under `data/raw/`
 - Runtime logs under `logs/`
 - Generated outputs (`.csv`, `.json`, figures, temporary analysis artifacts)
-- Thesis-specific scripts (`scripts/thesis_plots.py`, `scripts/thesis_summary.py`)
-- Context notes: `context_files/`
+- Internal-only scripts (`scripts/thesis_plots.py`, `scripts/thesis_summary.py`)
+- Internal tooling and notes (`.claude/`, `docs/superpowers/`, generated context dumps)
 - Local environment and cache folders (`.venv`, `__pycache__`, notebook checkpoints)
 
 These exclusions are enforced by `.gitignore`.
