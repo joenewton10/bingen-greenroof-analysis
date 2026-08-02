@@ -139,3 +139,10 @@ docker-compose.override.yml
 *.swp
 .salt/
 node_modules/
+
+# Claude Code / internal tooling (not for public repo)
+.claude/
+.playwright-mcp/
+docs/superpowers/
+CLAUDE_PROJECT_CONTEXT.md
+scripts/generate_claude_project_context.py

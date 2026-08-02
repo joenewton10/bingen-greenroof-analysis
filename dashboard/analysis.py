@@ -194,7 +194,7 @@ class BingenGreenRoofAnalyzer:
             radiation_balance_parkplatz
         FROM synchronized_data_filtered
         WHERE {' AND '.join(conditions)}
-        ORDER BY timestamp;
+        ORDER BY timestamp ASC;
         """)
         query_legacy = text(f"""
         SELECT
@@ -233,7 +233,7 @@ class BingenGreenRoofAnalyzer:
             radiation_balance_parkplatz
         FROM synchronized_data_filtered
         WHERE {' AND '.join(conditions)}
-        ORDER BY timestamp;
+        ORDER BY timestamp ASC;
         """)
         try:
             self.df = pd.read_sql_query(query_new, self.engine, params=params)
@@ -324,7 +324,7 @@ class BingenGreenRoofAnalyzer:
 
         self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
         self.df.set_index('timestamp', inplace=True)
-        self.df = self.df.sort_index()
+        self.df = self.df.sort_index(ascending=True)
         self.df = self.df[~self.df.index.duplicated(keep='first')]
 
         # Add time features

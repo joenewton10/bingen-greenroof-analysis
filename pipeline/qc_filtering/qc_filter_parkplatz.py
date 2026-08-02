@@ -18,8 +18,8 @@ QC_FILTER_RANGES = {
     'air_temp_1_c': (-25.0, 45.0),
     'air_temp_2_c': (-25.0, 45.0),
     'temp_c': (-25.0, 45.0),
-    'soil_temp_1_c': (-10.0, 50.0),  # Relaxed upper bound
-    'soil_temp_2_c': (-10.0, 50.0),  # Relaxed upper bound
+    'soil_temp_1_c': (-20.0, 70.0),  # paved surfaces routinely exceed 50 C in summer
+    'soil_temp_2_c': (-20.0, 70.0),  # paved surfaces routinely exceed 50 C in summer
     'internal_temp_c': (-30.0, 80.0),  # Device internal can run hot
     'air_humidity_1_rh': (0.0, 100.0),
     'air_humidity_2_rh': (0.0, 100.0),
@@ -44,8 +44,8 @@ FROM ingested_parkplatz
 WHERE (air_temp_1_c IS NULL OR (air_temp_1_c BETWEEN -25.0 AND 45.0))
   AND (air_temp_2_c IS NULL OR (air_temp_2_c BETWEEN -25.0 AND 45.0))
   AND (temp_c IS NULL OR (temp_c BETWEEN -25.0 AND 45.0))
-  AND (soil_temp_1_c IS NULL OR (soil_temp_1_c BETWEEN -10.0 AND 50.0))
-  AND (soil_temp_2_c IS NULL OR (soil_temp_2_c BETWEEN -10.0 AND 50.0))
+  AND (soil_temp_1_c IS NULL OR (soil_temp_1_c BETWEEN -20.0 AND 70.0))
+  AND (soil_temp_2_c IS NULL OR (soil_temp_2_c BETWEEN -20.0 AND 70.0))
   AND (internal_temp_c IS NULL OR (internal_temp_c BETWEEN -30.0 AND 80.0))
   AND (air_humidity_1_rh IS NULL OR (air_humidity_1_rh BETWEEN 0.0 AND 100.0))
   AND (air_humidity_2_rh IS NULL OR (air_humidity_2_rh BETWEEN 0.0 AND 100.0))

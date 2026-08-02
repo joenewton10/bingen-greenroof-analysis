@@ -16,7 +16,7 @@ from pipeline.ingest.base import get_connection
 # Quality-control ranges based on Bingen am Rhein climate and sensor capabilities
 QC_FILTER_RANGES = {
     'air_temperature': (-25.0, 45.0),
-    'soil_temperature': (-20.0, 50.0),
+    'soil_temperature': (-20.0, 70.0),  # surfaces can exceed 50 C in summer
     'relative_humidity': (0.0, 100.0),
     'wind_speed': (0.0, 50.0),
     'wind_direction': (0.0, 360.0),
@@ -57,8 +57,8 @@ WHERE
     AND (temperature IS NULL OR (temperature BETWEEN -25.0 AND 45.0))
 
     -- Soil temperature checks (allow -50 sentinel)
-    AND (soil_temp_1 IS NULL OR (soil_temp_1 BETWEEN -20.0 AND 50.0))
-    AND (soil_temp_2 IS NULL OR soil_temp_2 = -50.0 OR (soil_temp_2 BETWEEN -20.0 AND 50.0))
+    AND (soil_temp_1 IS NULL OR (soil_temp_1 BETWEEN -20.0 AND 70.0))
+    AND (soil_temp_2 IS NULL OR soil_temp_2 = -50.0 OR (soil_temp_2 BETWEEN -20.0 AND 70.0))
 
     -- Humidity checks
     AND (air_humidity_1 IS NULL OR (air_humidity_1 BETWEEN 0.0 AND 100.0))
@@ -106,8 +106,8 @@ WHERE
     AND (temperature IS NULL OR (temperature BETWEEN -25.0 AND 45.0))
 
     -- Soil temperature checks (allow -50 sentinel)
-    AND (soil_temp_1 IS NULL OR (soil_temp_1 BETWEEN -20.0 AND 50.0))
-    AND (soil_temp_2 IS NULL OR soil_temp_2 = -50.0 OR (soil_temp_2 BETWEEN -20.0 AND 50.0))
+    AND (soil_temp_1 IS NULL OR (soil_temp_1 BETWEEN -20.0 AND 70.0))
+    AND (soil_temp_2 IS NULL OR soil_temp_2 = -50.0 OR (soil_temp_2 BETWEEN -20.0 AND 70.0))
 
     -- Humidity checks
     AND (air_humidity_1 IS NULL OR (air_humidity_1 BETWEEN 0.0 AND 100.0))

@@ -88,7 +88,75 @@ SELECT
         AVG(p."SR2 [W/m2]"::numeric)
         / NULLIF(CASE WHEN AVG(p."SR1 [W/m2]"::numeric) >= 10 THEN AVG(p."SR1 [W/m2]"::numeric) END, 0),
         4
-    ) AS albedo_parkplatz
+    ) AS albedo_parkplatz,
+
+    -- Computed columns: specific humidity (Magnus over water, Bingen pressure p = 1002 hPa, q in g/kg)
+    -- e_s(T) = 6.112 * exp(17.62 * T / (243.12 + T))  [hPa]
+    -- e      = (RH/100) * e_s
+    -- q      = 0.622 * e / (p - 0.378 * e)  [kg/kg], multiplied by 1000 -> g/kg
+    -- Reference: WMO No. 8 (Annex 4.B); Alduchov & Eskridge (1996); Allen et al. (1998) FAO-56
+    ROUND(
+        (0.622 * (AVG(g.relative_humidity::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temperature::numeric) / (243.12 + AVG(g.air_temperature::numeric))))
+        / (1002.0 - 0.378 * (AVG(g.relative_humidity::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temperature::numeric) / (243.12 + AVG(g.air_temperature::numeric))))
+        * 1000.0,
+        4
+    ) AS q_greenroof_50cm,
+    ROUND(
+        (0.622 * (AVG(g.air_humidity_2::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temp_2::numeric) / (243.12 + AVG(g.air_temp_2::numeric))))
+        / (1002.0 - 0.378 * (AVG(g.air_humidity_2::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temp_2::numeric) / (243.12 + AVG(g.air_temp_2::numeric))))
+        * 1000.0,
+        4
+    ) AS q_greenroof_2m,
+    ROUND(
+        (0.622 * (AVG(p."Air Humidity 1 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 1 [C]"::numeric) / (243.12 + AVG(p."Air Temp 1 [C]"::numeric))))
+        / (1002.0 - 0.378 * (AVG(p."Air Humidity 1 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 1 [C]"::numeric) / (243.12 + AVG(p."Air Temp 1 [C]"::numeric))))
+        * 1000.0,
+        4
+    ) AS q_parkplatz_50cm,
+    ROUND(
+        (0.622 * (AVG(p."Air Humidity 2 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 2 [C]"::numeric) / (243.12 + AVG(p."Air Temp 2 [C]"::numeric))))
+        / (1002.0 - 0.378 * (AVG(p."Air Humidity 2 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 2 [C]"::numeric) / (243.12 + AVG(p."Air Temp 2 [C]"::numeric))))
+        * 1000.0,
+        4
+    ) AS q_parkplatz_2m,
+    -- Specific-humidity gradient delta_q = q_50cm - q_2m  (g/kg); positive = moister near surface
+    -- Roof delta_q is only physically meaningful when has_dual_level_greenroof = TRUE (Jan 2024 onwards)
+    ROUND(
+        ((0.622 * (AVG(g.relative_humidity::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temperature::numeric) / (243.12 + AVG(g.air_temperature::numeric))))
+         / (1002.0 - 0.378 * (AVG(g.relative_humidity::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temperature::numeric) / (243.12 + AVG(g.air_temperature::numeric))))
+         * 1000.0)
+        -
+        ((0.622 * (AVG(g.air_humidity_2::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temp_2::numeric) / (243.12 + AVG(g.air_temp_2::numeric))))
+         / (1002.0 - 0.378 * (AVG(g.air_humidity_2::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(g.air_temp_2::numeric) / (243.12 + AVG(g.air_temp_2::numeric))))
+         * 1000.0),
+        4
+    ) AS delta_q_roof,
+    ROUND(
+        ((0.622 * (AVG(p."Air Humidity 1 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 1 [C]"::numeric) / (243.12 + AVG(p."Air Temp 1 [C]"::numeric))))
+         / (1002.0 - 0.378 * (AVG(p."Air Humidity 1 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 1 [C]"::numeric) / (243.12 + AVG(p."Air Temp 1 [C]"::numeric))))
+         * 1000.0)
+        -
+        ((0.622 * (AVG(p."Air Humidity 2 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 2 [C]"::numeric) / (243.12 + AVG(p."Air Temp 2 [C]"::numeric))))
+         / (1002.0 - 0.378 * (AVG(p."Air Humidity 2 [%RH]"::numeric)/100.0)
+            * 6.112 * exp(17.62 * AVG(p."Air Temp 2 [C]"::numeric) / (243.12 + AVG(p."Air Temp 2 [C]"::numeric))))
+         * 1000.0),
+        4
+    ) AS delta_q_parkplatz
 
 FROM harm_greenroof g
 INNER JOIN harm_parkplatz p
@@ -103,9 +171,9 @@ HAVING
     AND (ROUND(AVG(p."Air Temp 1 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Air Temp 1 [C]"::numeric), 3) >= -25.0 AND ROUND(AVG(p."Air Temp 1 [C]"::numeric), 3) <= 45.0))
     AND (ROUND(AVG(p."Air Temp 2 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Air Temp 2 [C]"::numeric), 3) >= -25.0 AND ROUND(AVG(p."Air Temp 2 [C]"::numeric), 3) <= 45.0))
     AND (ROUND(AVG(p."Temp [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Temp [C]"::numeric), 3) >= -25.0 AND ROUND(AVG(p."Temp [C]"::numeric), 3) <= 45.0))
-    AND (ROUND(AVG(g.soil_temperature::numeric), 3) IS NULL OR (ROUND(AVG(g.soil_temperature::numeric), 3) >= -20.0 AND ROUND(AVG(g.soil_temperature::numeric), 3) <= 50.0))
-    AND (ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) >= -20.0 AND ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) <= 50.0))
-    AND (ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) >= -20.0 AND ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) <= 50.0))
+    AND (ROUND(AVG(g.soil_temperature::numeric), 3) IS NULL OR (ROUND(AVG(g.soil_temperature::numeric), 3) >= -20.0 AND ROUND(AVG(g.soil_temperature::numeric), 3) <= 70.0))
+    AND (ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) >= -20.0 AND ROUND(AVG(p."Soil Temp 1 [C]"::numeric), 3) <= 70.0))
+    AND (ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) IS NULL OR (ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) >= -20.0 AND ROUND(AVG(p."Soil Temp 2 [C]"::numeric), 3) <= 70.0))
 
     -- Humidity filters (custom ranges)
     AND (ROUND(AVG(g.relative_humidity::numeric), 3) IS NULL OR (ROUND(AVG(g.relative_humidity::numeric), 3) >= 0.0 AND ROUND(AVG(g.relative_humidity::numeric), 3) <= 100.0))

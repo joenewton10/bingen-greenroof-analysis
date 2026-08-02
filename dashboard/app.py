@@ -65,13 +65,13 @@ def _specific_humidity(temp_c_series, rh_series, pressure_hpa_series):
 
 
 def render_guided_dashboard(analyzer, temp_diff_choice):
-    st.subheader("🧭 Guided Thesis Mode")
-    st.caption("Follow this sequence for your professor meeting: overall signal → temporal structure → significance → monthly progression → energy pathways → case days.")
+    st.subheader("🧭 Analysis Mode")
+    st.caption("Follow this sequence")
 
     overall = analyzer.get_overall_signal_stats(temp_diff_col=temp_diff_choice)
     year_sig = analyzer.get_year_significance_summary(temp_diff_col=temp_diff_choice)
 
-    with st.expander("Professor Meeting Summary", expanded=True):
+    with st.expander("Summary", expanded=True):
         col1, col2, col3 = st.columns(3)
         col1.metric("Overall mean signal [°C]", f"{overall['mean']:.3f}")
         col2.metric("95% CI", f"[{overall['ci_low']:.3f}, {overall['ci_high']:.3f}]")
@@ -514,9 +514,9 @@ def main():
 
     dashboard_mode = st.sidebar.radio(
         "Dashboard Mode",
-        ["Guided Thesis Mode", "Advanced Diagnostics"],
+        ["Analysis Mode", "Advanced Diagnostics (Environmental Conditions)"],
         index=0,
-        help="Guided mode follows thesis flow. Advanced mode keeps the full exploratory tab set.",
+        help="Analysis mode follows a structured flow. Advanced mode keeps the full exploratory tab set.",
     )
 
     st.sidebar.markdown("---")
@@ -588,7 +588,7 @@ def main():
         st.plotly_chart(fig_yearly, use_container_width=True)
         st.dataframe(yearly_summary, use_container_width=True, hide_index=True)
 
-    if dashboard_mode == "Guided Thesis Mode":
+    if dashboard_mode == "Analysis Mode":
         render_guided_dashboard(analyzer, temp_diff_choice)
         return
     

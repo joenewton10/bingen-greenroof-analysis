@@ -88,7 +88,11 @@ def is_empower_greenroof_file(file_path):
     try:
         with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
             first_line = f.readline().strip()
-        return first_line.startswith('Geraetetyp') or first_line.startswith('ONLINEMESSUNG')
+        return (
+            first_line.startswith('Geraetetyp')
+            or first_line.startswith('ONLINEMESSUNG')
+            or first_line.startswith('Station Name;')
+        )
     except Exception:
         return False
 
@@ -121,6 +125,21 @@ def parse_datetime_german(date_str):
     return None
 
 
+def parse_datetime_iso(date_str):
+    '''Parse ISO datetime used by new Empower greenroof exports.'''
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    if s == '':
+        return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def extract_serial_number(file_path):
     '''Extract serial number from header lines.'''
     try:
@@ -141,26 +160,55 @@ def extract_serial_number(file_path):
                     parts = line.split(';')
                     if len(parts) >= 2 and 'Seriennummer' in parts[0]:
                         return parts[1].strip()
+                    if len(parts) >= 2 and parts[0].strip() == 'Serial No':
+                        return parts[1].strip()
     except Exception:
         pass
     return None
 
 
-def _parse_empower_file(path):
-    """Parse one Empower file into insert-ready rows."""
-    file = os.path.basename(path)
+def _parse_new_empower_file(lines, serial_no, file):
+    '''Parse new 2026 Empower greenroof station export format.'''
+    rows_to_insert = []
 
-    if not is_empower_greenroof_file(path):
-        return []
+    for line in lines:
+        if not line.strip():
+            continue
 
-    with open(path, 'r', encoding='latin-1', errors='ignore') as f:
-        lines = f.readlines()
+        row = [cell.strip() for cell in line.strip().split(';')]
+        if len(row) < 26:
+            continue
 
-    if len(lines) < 18:
-        return []
+        timestamp = parse_datetime_iso(row[0])
+        if timestamp is None:
+            continue
 
-    serial_no = extract_serial_number(path)
+        rows_to_insert.append((
+            timestamp,
+            serial_no,
+            parse_german_float(row[24]),  # ir1 <- IR sky [W/m2]
+            parse_german_float(row[22]),  # sr1 <- SR sky [W/m2]
+            parse_german_float(row[25]),  # ir2 <- IR ground [W/m2]
+            parse_german_float(row[23]),  # sr2 <- SR ground [W/m2]
+            parse_german_float(row[12]),  # temperature <- PyrTemp [C]
+            None,                         # air_pressure unavailable in new format
+            None,                         # soil_moisture unavailable in new format
+            parse_german_float(row[13]),  # soil_temp_1 <- BodenTemp 1cm
+            parse_german_float(row[14]),  # soil_temp_2 <- BodenTemp 6cm
+            parse_german_float(row[17]),  # air_humidity_1 <- RH oben
+            parse_german_float(row[16]),  # air_temp_1 <- LuftTemp oben
+            parse_german_float(row[19]),  # air_humidity_2 <- RH unten
+            parse_german_float(row[18]),  # air_temp_2 <- LuftTemp unten
+            parse_german_float(row[20]),  # wind_speed <- Windgeschwindigkeit
+            parse_german_float(row[21]),  # wind_direction <- Windrichtung
+            file,
+        ))
 
+    return rows_to_insert
+
+
+def _parse_old_empower_file(lines, serial_no, file):
+    '''Parse legacy LT6-digi-GPRS Empower greenroof export format.'''
     header_line_idx = None
     for i, line in enumerate(lines):
         if line.strip().startswith('Nr.;Datum') or ('Nr.;' in line and 'Datum' in line):
@@ -206,6 +254,27 @@ def _parse_empower_file(path):
         ))
 
     return rows_to_insert
+
+
+def _parse_empower_file(path):
+    """Parse one Empower file into insert-ready rows."""
+    file = os.path.basename(path)
+
+    if not is_empower_greenroof_file(path):
+        return []
+
+    with open(path, 'r', encoding='latin-1', errors='ignore') as f:
+        lines = f.readlines()
+
+    if len(lines) < 18:
+        return []
+
+    serial_no = extract_serial_number(path)
+
+    if lines[0].startswith('Station Name;'):
+        return _parse_new_empower_file(lines, serial_no, file)
+
+    return _parse_old_empower_file(lines, serial_no, file)
 
 
 def ingest_empower_greenroof():
