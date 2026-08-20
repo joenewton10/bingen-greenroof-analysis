@@ -6,6 +6,7 @@ This folder contains operational documentation for the Bingen pipeline.
 
 - `PIPELINE_GUIDE.md`: Full pipeline behavior and stage-by-stage details
 - `QUICK_START.md`: Fast setup and execution steps
+- `DATASET_ACCESS_GUIDE.md`: Querying the synchronized dataset via SQLite/Parquet without a live PostgreSQL connection
 
 ## Pipeline Overview
 

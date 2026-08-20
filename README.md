@@ -57,7 +57,7 @@ Each stage earns its place:
 - **2.15M+ synchronized records**, minute-level resolution, spanning **6 years** (Jul 2020 – May 2026)
 - **~1,900 raw CSV files** ingested from **2 independent vendor sensor systems**
 - Yearly table partitioning for query performance on a multi-million-row analytics table
-- Export scripts to **SQLite** and **Parquet** (the latter DuckDB-accelerated) decouple downstream analysis from a live PostgreSQL connection — schema reference in [`DATASET_ACCESS_GUIDE.md`](DATASET_ACCESS_GUIDE.md)
+- Export scripts to **SQLite** and **Parquet** (the latter DuckDB-accelerated) decouple downstream analysis from a live PostgreSQL connection — schema reference in [`instructions/DATASET_ACCESS_GUIDE.md`](instructions/DATASET_ACCESS_GUIDE.md)
 - CLI orchestrator (`scripts/run_pipeline.py`) supporting stage ranges, dry-runs, and verbose logging for operational control
 - A recurring **monthly update workflow** (`scripts/run_monthly_update.py`) that dry-runs, executes, verifies, and re-aggregates on new data automatically
 
@@ -129,7 +129,7 @@ python scripts/run_pipeline.py --from qc-filter
 python scripts/run_pipeline.py --from harmonize --to sync
 ```
 
-More detail: [`instructions/QUICK_START.md`](instructions/QUICK_START.md) · [`instructions/PIPELINE_GUIDE.md`](instructions/PIPELINE_GUIDE.md)
+More detail: [`instructions/QUICK_START.md`](instructions/QUICK_START.md) · [`instructions/PIPELINE_GUIDE.md`](instructions/PIPELINE_GUIDE.md) · [`instructions/DATASET_ACCESS_GUIDE.md`](instructions/DATASET_ACCESS_GUIDE.md)
 
 ## Repository Structure
 

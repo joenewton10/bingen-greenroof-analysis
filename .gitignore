@@ -111,10 +111,12 @@ test_output/
 context_files/
 scripts/thesis_plots.py
 scripts/thesis_summary.py
+REPORT_CHAPTER_SetupProcedure.md
 
 # Instructions docs (tracked)
 !instructions/
 !instructions/*.md
+instructions/REPORT_CHAPTER_SetupProcedure.md
 
 # Database
 *.dump
