@@ -102,6 +102,11 @@ outputs/*
 !outputs/parkplatz_qc_shortlist.md
 test_output/
 
+# README figures (hand-picked, tracked)
+!assets/
+!assets/readme/
+!assets/readme/*.png
+
 # Internal thesis context notes and scripts (not for public repo)
 context_files/
 scripts/thesis_plots.py
