@@ -13,7 +13,9 @@
 
 Green roofs are widely promoted as an urban heat island mitigation strategy, but most performance claims rest on short field campaigns or simulations. This project asks a narrower, harder question with real multi-year field data: **does a semi-intensive green roof at TH Bingen (Bingen am Rhein, Germany) measurably cool the local microclimate compared to an adjacent parking lot — and if so, under what conditions?**
 
-Two weather stations — one on the green roof, one over a parking lot reference surface — have logged radiation, temperature, humidity, wind, and soil sensors since 2020, across two different vendor systems. This pipeline turns six years of that raw, messy sensor output into a single minute-level synchronized dataset and a statistically rigorous answer.
+Two weather stations — one on the green roof, one over a parking lot reference surface — have logged radiation, temperature, humidity, wind, and soil sensors since 2020, across two different vendor systems. This pipeline turns six years of that raw, messy sensor output — 2.15M+ minute-level records — into a single synchronized dataset and a statistically rigorous answer.
+
+Answering it required building a full data-engineering pipeline — ingestion, quality control, multi-vendor schema harmonization, and derived-variable engineering in SQL — then applying non-parametric hypothesis testing (Mann-Whitney U, Kruskal-Wallis) and effect-size analysis across day/night, seasonal, and multi-year splits to determine not just whether the roof cools, but when, by how much, and under which conditions.
 
 ## Key Finding: The Effect Reverses at Night
 
