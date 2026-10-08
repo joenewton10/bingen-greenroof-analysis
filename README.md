@@ -1,4 +1,4 @@
-# Bingen Green Roof Microclimate Pipeline
+# Bingen Green Roof Microclimate Data Pipeline
 
 **Does a green roof actually cool a building down?** Six years of sensor data from a real green roof and a paved reference surface say: it depends, and the answer flips between day and night.
 
