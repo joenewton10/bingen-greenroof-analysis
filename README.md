@@ -1,6 +1,6 @@
 # Bingen Green Roof Microclimate Data Pipeline
 
-**Does a green roof actually cool a building down?** Six years of sensor data from a real green roof and a paved reference surface say: it depends, and the answer flips between day and night.
+**Does a green roof actually cool a building down?** Six years of sensor data (2.15M+ minute-level records) from a real green roof and a paved reference surface say: it depends, and the answer flips between day and night.
 
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.54-FF4B4B.svg)](https://streamlit.io/)
